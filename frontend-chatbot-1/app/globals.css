@@ -3,6 +3,7 @@
 @tailwind utilities;
 
 @import './chat-scrollbar.css';
+@import './markdown.css';
 
 @layer base {
   :root {

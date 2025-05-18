@@ -83,6 +83,10 @@ export default function SignIn() {
         setError("Login request timed out. Please try again.")
       } else if (error.message.includes('network') || error.message.includes('fetch')) {
         setError("Network error. Please check your connection and try again.")
+      } else if (error.message.includes('Email not confirmed')) {
+        setError("Email not confirmed. Please check your email inbox and click the confirmation link.")
+      } else if (error.message.includes('Invalid login credentials')) {
+        setError("Invalid email or password. Please try again or use test@example.com / password123 for testing.")
       } else {
         setError(error.message || "An error occurred during sign in")
       }

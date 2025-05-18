@@ -4,10 +4,24 @@ import type React from "react"
 
 import { useState, useRef, useEffect } from "react"
 import { motion, AnimatePresence } from "framer-motion"
-import { LogOut, User, Settings, HelpCircle } from "lucide-react"
+import { LogOut, User, Settings, HelpCircle, Mail, Phone, Save, Loader2, Camera, Upload } from "lucide-react"
 import { useRouter } from "next/navigation"
 import { cn } from "@/lib/utils"
-import { authAPI } from "@/lib/api"
+import { authAPI, settingsAPI } from "@/lib/api"
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+  DialogFooter
+} from "@/components/ui/dialog"
+import { Button } from "@/components/ui/button"
+import { Input } from "@/components/ui/input"
+import { Label } from "@/components/ui/label"
+import { Textarea } from "@/components/ui/textarea"
+import { Avatar, AvatarImage, AvatarFallback } from "@/components/ui/avatar"
+import { Alert, AlertDescription } from "@/components/ui/alert"
 
 interface UserProfileDropdownProps {
   user: any
@@ -15,6 +29,27 @@ interface UserProfileDropdownProps {
 
 export function UserProfileDropdown({ user }: UserProfileDropdownProps) {
   const [isOpen, setIsOpen] = useState(false)
+  const [isProfileOpen, setIsProfileOpen] = useState(false)
+  const [isSettingsOpen, setIsSettingsOpen] = useState(false)
+  const [isHelpOpen, setIsHelpOpen] = useState(false)
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState("")
+  const [success, setSuccess] = useState("")
+  const [profileData, setProfileData] = useState({
+    fullName: user?.full_name || "",
+    email: user?.email || "",
+    phone: "",
+    bio: "",
+    avatarUrl: user?.avatar_url || ""
+  })
+  const [apiKeys, setApiKeys] = useState({
+    gemini_api_key: "",
+    vapi_api_key: "",
+    raper_url: ""
+  })
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null)
+  const fileInputRef = useRef<HTMLInputElement>(null)
+
   const dropdownRef = useRef<HTMLDivElement>(null)
   const router = useRouter()
 
@@ -31,6 +66,29 @@ export function UserProfileDropdown({ user }: UserProfileDropdownProps) {
     }
   }, [])
 
+  // Tải API keys khi mở Settings dialog
+  useEffect(() => {
+    if (isSettingsOpen) {
+      const loadSettings = async () => {
+        try {
+          const { settings } = await settingsAPI.getSettings()
+          if (settings) {
+            setApiKeys({
+              gemini_api_key: settings.gemini_api_key || "",
+              vapi_api_key: settings.vapi_api_key || "",
+              raper_url: settings.raper_url || ""
+            })
+          }
+        } catch (error) {
+          console.error("Error loading settings:", error)
+          // Không hiển thị lỗi cho người dùng, chỉ ghi log
+        }
+      }
+
+      loadSettings()
+    }
+  }, [isSettingsOpen])
+
   const handleSignOut = async () => {
     try {
       console.log("Signing out...")
@@ -41,6 +99,90 @@ export function UserProfileDropdown({ user }: UserProfileDropdownProps) {
       console.error("Error signing out:", error)
       // Even if there's an error, still redirect to home page
       window.location.href = "/"
+    }
+  }
+
+  const handleProfileChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
+    const { name, value } = e.target
+    setProfileData(prev => ({
+      ...prev,
+      [name]: value
+    }))
+  }
+
+  const handleApiKeyChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const { name, value } = e.target
+    setApiKeys(prev => ({
+      ...prev,
+      [name]: value
+    }))
+  }
+
+  const handleProfileSubmit = async (e: React.FormEvent) => {
+    e.preventDefault()
+    setLoading(true)
+    setError("")
+    setSuccess("")
+
+    try {
+      // Simulate API call
+      await new Promise(resolve => setTimeout(resolve, 1000))
+
+      // Here you would make an actual API call to update the profile
+      // const response = await userAPI.updateProfile(profileData)
+
+      setSuccess("Profile updated successfully!")
+      setLoading(false)
+
+      // Close the dialog after a short delay
+      setTimeout(() => {
+        setIsProfileOpen(false)
+        setSuccess("")
+      }, 2000)
+    } catch (error) {
+      console.error("Error updating profile:", error)
+      setError("Failed to update profile. Please try again.")
+      setLoading(false)
+    }
+  }
+
+  const handleSettingsSubmit = async (e: React.FormEvent) => {
+    e.preventDefault()
+    setLoading(true)
+    setError("")
+    setSuccess("")
+
+    try {
+      // Gọi API để lưu API keys
+      await settingsAPI.updateSettings(apiKeys)
+
+      setSuccess("Settings saved successfully!")
+      setLoading(false)
+
+      // Close the dialog after a short delay
+      setTimeout(() => {
+        setIsSettingsOpen(false)
+        setSuccess("")
+      }, 2000)
+    } catch (error) {
+      console.error("Error saving settings:", error)
+      setError("Failed to save settings. Please try again.")
+      setLoading(false)
+    }
+  }
+
+  const handleAvatarClick = () => {
+    fileInputRef.current?.click()
+  }
+
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (file) {
+      const reader = new FileReader()
+      reader.onloadend = () => {
+        setPreviewUrl(reader.result as string)
+      }
+      reader.readAsDataURL(file)
     }
   }
 
@@ -93,9 +235,30 @@ export function UserProfileDropdown({ user }: UserProfileDropdownProps) {
             </div>
 
             <div className="p-2">
-              <ProfileMenuItem icon={<User className="w-4 h-4" />} label="Profile" onClick={() => {}} />
-              <ProfileMenuItem icon={<Settings className="w-4 h-4" />} label="Settings" onClick={() => {}} />
-              <ProfileMenuItem icon={<HelpCircle className="w-4 h-4" />} label="Help" onClick={() => {}} />
+              <ProfileMenuItem
+                icon={<User className="w-4 h-4" />}
+                label="Profile"
+                onClick={() => {
+                  setIsProfileOpen(true)
+                  setIsOpen(false)
+                }}
+              />
+              <ProfileMenuItem
+                icon={<Settings className="w-4 h-4" />}
+                label="Settings"
+                onClick={() => {
+                  setIsSettingsOpen(true)
+                  setIsOpen(false)
+                }}
+              />
+              <ProfileMenuItem
+                icon={<HelpCircle className="w-4 h-4" />}
+                label="Help"
+                onClick={() => {
+                  setIsHelpOpen(true)
+                  setIsOpen(false)
+                }}
+              />
               <ProfileMenuItem
                 icon={<LogOut className="w-4 h-4" />}
                 label="Sign Out"
@@ -106,6 +269,337 @@ export function UserProfileDropdown({ user }: UserProfileDropdownProps) {
           </motion.div>
         )}
       </AnimatePresence>
+
+      {/* Profile Dialog */}
+      <Dialog open={isProfileOpen} onOpenChange={setIsProfileOpen}>
+        <DialogContent className="backdrop-blur-md bg-zinc-800/60 border border-white/10 text-white sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle className="text-2xl font-bold text-white">Edit Profile</DialogTitle>
+            <DialogDescription className="text-zinc-400">
+              Update your profile information
+            </DialogDescription>
+          </DialogHeader>
+
+          <form onSubmit={handleProfileSubmit} className="space-y-4">
+            {error && (
+              <Alert variant="destructive" className="mb-4 bg-red-500/20 border border-red-500/50">
+                <AlertDescription>{error}</AlertDescription>
+              </Alert>
+            )}
+
+            {success && (
+              <Alert className="mb-4 bg-green-500/20 border border-green-500/50 text-green-400">
+                <AlertDescription>{success}</AlertDescription>
+              </Alert>
+            )}
+
+            <div className="flex justify-center mb-4">
+              <div className="relative">
+                <Avatar className="w-24 h-24 border-4 border-zinc-700/50 cursor-pointer" onClick={handleAvatarClick}>
+                  {(previewUrl || profileData.avatarUrl) ? (
+                    <AvatarImage src={previewUrl || profileData.avatarUrl} />
+                  ) : (
+                    <AvatarFallback className="bg-zinc-700 text-white text-xl">
+                      {profileData.fullName.charAt(0) || user?.email?.charAt(0).toUpperCase() || "U"}
+                    </AvatarFallback>
+                  )}
+                </Avatar>
+                <div className="absolute bottom-0 right-0 bg-zinc-700 rounded-full p-1 border border-white/10 cursor-pointer" onClick={handleAvatarClick}>
+                  <Camera className="w-4 h-4 text-white" />
+                </div>
+                <input
+                  type="file"
+                  ref={fileInputRef}
+                  className="hidden"
+                  accept="image/*"
+                  onChange={handleFileChange}
+                />
+              </div>
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="fullName" className="text-white">Full Name</Label>
+              <Input
+                id="fullName"
+                name="fullName"
+                type="text"
+                value={profileData.fullName}
+                onChange={handleProfileChange}
+                className={cn(
+                  "bg-zinc-800/50 border-white/10",
+                  "text-white placeholder:text-zinc-500",
+                  "focus:border-white/20 focus:ring-0 focus-visible:ring-0 focus-visible:ring-offset-0"
+                )}
+              />
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="email" className="text-white">Email</Label>
+              <Input
+                id="email"
+                name="email"
+                type="email"
+                value={profileData.email}
+                onChange={handleProfileChange}
+                className={cn(
+                  "bg-zinc-800/50 border-white/10",
+                  "text-white placeholder:text-zinc-500",
+                  "focus:border-white/20 focus:ring-0 focus-visible:ring-0 focus-visible:ring-offset-0"
+                )}
+              />
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="phone" className="text-white">Phone</Label>
+              <Input
+                id="phone"
+                name="phone"
+                type="tel"
+                value={profileData.phone}
+                onChange={handleProfileChange}
+                className={cn(
+                  "bg-zinc-800/50 border-white/10",
+                  "text-white placeholder:text-zinc-500",
+                  "focus:border-white/20 focus:ring-0 focus-visible:ring-0 focus-visible:ring-offset-0"
+                )}
+              />
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="bio" className="text-white">Bio</Label>
+              <Textarea
+                id="bio"
+                name="bio"
+                value={profileData.bio}
+                onChange={handleProfileChange}
+                className={cn(
+                  "bg-zinc-800/50 border-white/10",
+                  "text-white placeholder:text-zinc-500",
+                  "focus:border-white/20 focus:ring-0 focus-visible:ring-0 focus-visible:ring-offset-0",
+                  "min-h-[100px]"
+                )}
+              />
+            </div>
+
+            <DialogFooter className="mt-6">
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => setIsProfileOpen(false)}
+                className="border-white/10 text-white hover:bg-white/10"
+              >
+                Cancel
+              </Button>
+              <Button
+                type="submit"
+                className="bg-white/10 text-white border border-white/10 hover:bg-white/20 hover:border-white/20"
+                disabled={loading}
+              >
+                {loading ? (
+                  <>
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    Saving...
+                  </>
+                ) : (
+                  <>
+                    <Save className="mr-2 h-4 w-4" />
+                    Save Changes
+                  </>
+                )}
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
+
+      {/* Settings Dialog */}
+      <Dialog open={isSettingsOpen} onOpenChange={setIsSettingsOpen}>
+        <DialogContent className="backdrop-blur-md bg-zinc-800/60 border border-white/10 text-white sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle className="text-2xl font-bold text-white">Settings</DialogTitle>
+            <DialogDescription className="text-zinc-400">
+              Manage your account settings and API keys
+            </DialogDescription>
+          </DialogHeader>
+
+          <form onSubmit={handleSettingsSubmit} className="space-y-4">
+            {error && (
+              <Alert variant="destructive" className="mb-4 bg-red-500/20 border border-red-500/50">
+                <AlertDescription>{error}</AlertDescription>
+              </Alert>
+            )}
+
+            {success && (
+              <Alert className="mb-4 bg-green-500/20 border border-green-500/50 text-green-400">
+                <AlertDescription>{success}</AlertDescription>
+              </Alert>
+            )}
+
+            <div className="space-y-2">
+              <Label htmlFor="gemini_api_key" className="text-white">Gemini API Key</Label>
+              <Input
+                id="gemini_api_key"
+                name="gemini_api_key"
+                type="password"
+                value={apiKeys.gemini_api_key}
+                onChange={handleApiKeyChange}
+                className={cn(
+                  "bg-zinc-800/50 border-white/10",
+                  "text-white placeholder:text-zinc-500",
+                  "focus:border-white/20 focus:ring-0 focus-visible:ring-0 focus-visible:ring-offset-0"
+                )}
+                placeholder="Enter your Gemini API key"
+              />
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="vapi_api_key" className="text-white">Vapi API Key</Label>
+              <Input
+                id="vapi_api_key"
+                name="vapi_api_key"
+                type="password"
+                value={apiKeys.vapi_api_key}
+                onChange={handleApiKeyChange}
+                className={cn(
+                  "bg-zinc-800/50 border-white/10",
+                  "text-white placeholder:text-zinc-500",
+                  "focus:border-white/20 focus:ring-0 focus-visible:ring-0 focus-visible:ring-offset-0"
+                )}
+                placeholder="Enter your Vapi API key"
+              />
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="raper_url" className="text-white">Raper URL</Label>
+              <Input
+                id="raper_url"
+                name="raper_url"
+                type="text"
+                value={apiKeys.raper_url}
+                onChange={handleApiKeyChange}
+                className={cn(
+                  "bg-zinc-800/50 border-white/10",
+                  "text-white placeholder:text-zinc-500",
+                  "focus:border-white/20 focus:ring-0 focus-visible:ring-0 focus-visible:ring-offset-0"
+                )}
+                placeholder="Enter your Raper URL"
+              />
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="theme" className="text-white">Theme</Label>
+              <div className="flex gap-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="flex-1 border-white/10 text-white hover:bg-white/10"
+                >
+                  Light
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="flex-1 border-white/10 bg-white/10 text-white hover:bg-white/20"
+                >
+                  Dark
+                </Button>
+              </div>
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="notifications" className="text-white">Notifications</Label>
+              <div className="flex items-center space-x-2">
+                <input
+                  type="checkbox"
+                  id="notifications"
+                  className="h-4 w-4 rounded border-white/10 bg-zinc-800/50"
+                />
+                <Label htmlFor="notifications" className="text-sm text-white/80">
+                  Enable email notifications
+                </Label>
+              </div>
+            </div>
+
+            <DialogFooter className="mt-6">
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => setIsSettingsOpen(false)}
+                className="border-white/10 text-white hover:bg-white/10"
+              >
+                Cancel
+              </Button>
+              <Button
+                type="submit"
+                className="bg-white/10 text-white border border-white/10 hover:bg-white/20 hover:border-white/20"
+                disabled={loading}
+              >
+                {loading ? (
+                  <>
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    Saving...
+                  </>
+                ) : (
+                  <>
+                    <Save className="mr-2 h-4 w-4" />
+                    Save Settings
+                  </>
+                )}
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
+
+      {/* Help Dialog */}
+      <Dialog open={isHelpOpen} onOpenChange={setIsHelpOpen}>
+        <DialogContent className="backdrop-blur-md bg-zinc-800/60 border border-white/10 text-white">
+          <DialogHeader>
+            <DialogTitle className="text-2xl font-bold text-white">Help Center</DialogTitle>
+            <DialogDescription className="text-zinc-400">
+              Get help with your account
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-4">
+            <div className="rounded-lg border border-white/10 p-4">
+              <h3 className="text-lg font-medium mb-2">Frequently Asked Questions</h3>
+              <ul className="space-y-2 text-white/80">
+                <li className="hover:text-white cursor-pointer">How do I reset my password?</li>
+                <li className="hover:text-white cursor-pointer">How to update my profile information?</li>
+                <li className="hover:text-white cursor-pointer">Can I delete my account?</li>
+              </ul>
+            </div>
+
+            <div className="rounded-lg border border-white/10 p-4">
+              <h3 className="text-lg font-medium mb-2">Contact Support</h3>
+              <p className="text-white/80 mb-4">
+                Need more help? Contact our support team.
+              </p>
+              <div className="flex flex-col space-y-2">
+                <div className="flex items-center gap-2 text-white/80">
+                  <Mail className="w-4 h-4" />
+                  <span>support@example.com</span>
+                </div>
+                <div className="flex items-center gap-2 text-white/80">
+                  <Phone className="w-4 h-4" />
+                  <span>+1 (123) 456-7890</span>
+                </div>
+              </div>
+            </div>
+
+            <DialogFooter>
+              <Button
+                type="button"
+                onClick={() => setIsHelpOpen(false)}
+                className="bg-white/10 text-white border border-white/10 hover:bg-white/20 hover:border-white/20"
+              >
+                Close
+              </Button>
+            </DialogFooter>
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }
@@ -133,39 +627,5 @@ function ProfileMenuItem({ icon, label, onClick, className }: ProfileMenuItemPro
   )
 }
 
-function Avatar({ defaultImage, useImageUpload }: { defaultImage?: string, useImageUpload: any }) {
-  const { previewUrl, fileInputRef, handleThumbnailClick, handleFileChange } = useImageUpload;
 
-  const currentImage = previewUrl || defaultImage;
 
-  return (
-    <div className="-mt-10 px-6">
-      <div className="relative flex size-20 items-center justify-center overflow-hidden rounded-full border-4 border-background bg-muted shadow-sm shadow-black/10">
-        {currentImage && (
-          <img
-            src={currentImage}
-            className="h-full w-full object-cover"
-            width={80}
-            height={80}
-            alt="Profile image"
-          />
-        )}
-        <button
-          type="button"
-          className="absolute flex size-8 cursor-pointer items-center justify-center rounded-full bg-black/60 text-white outline-offset-2 transition-colors hover:bg-black/80 focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring/70"
-          onClick={handleThumbnailClick}
-          aria-label="Change profile picture"
-        >
-        </button>
-        <input
-          type="file"
-          ref={fileInputRef}
-          onChange={handleFileChange}
-          className="hidden"
-          accept="image/*"
-          aria-label="Upload profile picture"
-        />
-      </div>
-    </div>
-  );
-}

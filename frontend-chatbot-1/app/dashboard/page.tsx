@@ -1,25 +1,16 @@
 "use client";
 
-import { useEffect, useState, useRef } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { ProfessionalChat } from "@/components/ui/professional-chat";
+import { ProfessionalChatWithGemini } from "@/components/ui/professional-chat-with-gemini";
 import { UserProfileDropdown } from "@/components/user-profile-dropdown";
 import { Loader2 } from "lucide-react";
 import { userAPI, isAuthenticated } from "@/lib/api";
 
-interface Message {
-    id: number;
-    content: string;
-    sender: "user" | "bot";
-    timestamp: string;
-}
-
 export default function Dashboard() {
     const [user, setUser] = useState<any>(null);
     const [loading, setLoading] = useState(true);
-    const [messages, setMessages] = useState<Message[]>([]);
     const router = useRouter();
-    const messagesEndRef = useRef<HTMLDivElement>(null);
 
     // Logo component
     const Logo = () => {
@@ -38,11 +29,6 @@ export default function Dashboard() {
             </div>
         );
     };
-
-    // Tự động cuộn xuống tin nhắn mới nhất
-    useEffect(() => {
-        messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-    }, [messages]);
 
     useEffect(() => {
         const checkUser = async () => {
@@ -118,9 +104,9 @@ export default function Dashboard() {
                 </div>
             </nav>
 
-            {/* AI Chat interface */}
+            {/* AI Chat interface with Gemini */}
             <div className="flex-1 flex flex-col relative z-10">
-                <ProfessionalChat messages={messages} setMessages={setMessages} />
+                <ProfessionalChatWithGemini user={user} />
             </div>
         </div>
     );

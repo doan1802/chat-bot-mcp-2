@@ -4,16 +4,29 @@ const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3000';
 
 // Helper function to add timeout to fetch
 const fetchWithTimeout = async (url: string, options: RequestInit, timeout = 10000) => {
+  console.log(`Fetching ${url} with method ${options.method}`);
+
   const controller = new AbortController();
-  const id = setTimeout(() => controller.abort(), timeout);
+  const id = setTimeout(() => {
+    console.log(`Request to ${url} timed out after ${timeout}ms`);
+    controller.abort();
+  }, timeout);
 
-  const response = await fetch(url, {
-    ...options,
-    signal: controller.signal
-  });
+  try {
+    const response = await fetch(url, {
+      ...options,
+      signal: controller.signal
+    });
 
-  clearTimeout(id);
-  return response;
+    console.log(`Response from ${url}: ${response.status}`);
+
+    clearTimeout(id);
+    return response;
+  } catch (error) {
+    clearTimeout(id);
+    console.error(`Fetch error for ${url}:`, error);
+    throw error;
+  }
 };
 
 // Auth API
@@ -207,6 +220,68 @@ export const userAPI = {
   },
 };
 
+// Settings API
+export const settingsAPI = {
+  // Get user settings
+  getSettings: async () => {
+    const token = getAuthToken();
+    if (!token) {
+      console.log("No authentication token found, redirecting to home page");
+      if (typeof window !== 'undefined') {
+        window.location.href = '/';
+      }
+      return { settings: null };
+    }
+
+    console.log("Getting user settings...");
+
+    // Use direct settings endpoint to bypass proxy
+    const response = await fetchWithTimeout(`${API_URL}/api/direct-settings`, {
+      method: 'GET',
+      headers: getAuthHeaders(),
+    }, 5000);
+
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || 'Failed to fetch settings');
+    }
+
+    return response.json();
+  },
+
+  // Update user settings
+  updateSettings: async (data: {
+    theme?: string;
+    language?: string;
+    gemini_api_key?: string;
+    vapi_api_key?: string;
+    raper_url?: string;
+  }) => {
+    const token = getAuthToken();
+    if (!token) {
+      console.log("No authentication token found, redirecting to home page");
+      if (typeof window !== 'undefined') {
+        window.location.href = '/';
+      }
+      return { settings: null };
+    }
+
+    // Use direct settings endpoint to bypass proxy
+    const response = await fetchWithTimeout(`${API_URL}/api/direct-settings`, {
+      method: 'PUT',
+      headers: getAuthHeaders(),
+      body: JSON.stringify(data),
+    }, 5000);
+
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || 'Failed to update settings');
+    }
+
+    return response.json();
+  },
+};
+
 // Helper function to check if user is authenticated
 export const isAuthenticated = async () => {
   if (typeof window === 'undefined') return false;
@@ -238,14 +313,217 @@ export const isAuthenticated = async () => {
   }
 };
 
+// Chat API
+export const chatAPI = {
+  // Lấy danh sách cuộc trò chuyện
+  getChats: async () => {
+    const token = getAuthToken();
+    if (!token) {
+      console.log("No authentication token found, redirecting to home page");
+      if (typeof window !== 'undefined') {
+        window.location.href = '/';
+      }
+      return { chats: [] };
+    }
+
+    const response = await fetchWithTimeout(`${API_URL}/api/direct-chats`, {
+      method: 'GET',
+      headers: getAuthHeaders(),
+    }, 5000);
+
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || 'Failed to fetch chats');
+    }
+
+    return response.json();
+  },
+
+  // Tạo cuộc trò chuyện mới
+  createChat: async (title?: string) => {
+    const token = getAuthToken();
+    if (!token) {
+      console.log("No authentication token found, redirecting to home page");
+      if (typeof window !== 'undefined') {
+        window.location.href = '/';
+      }
+      return { chat: null };
+    }
+
+    const response = await fetchWithTimeout(`${API_URL}/api/direct-chats`, {
+      method: 'POST',
+      headers: getAuthHeaders(),
+      body: JSON.stringify({ title: title || 'New Chat' }),
+    }, 5000);
+
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || 'Failed to create chat');
+    }
+
+    return response.json();
+  },
+
+  // Lấy thông tin cuộc trò chuyện và tin nhắn
+  getChatById: async (chatId: string) => {
+    const token = getAuthToken();
+    if (!token) {
+      console.log("No authentication token found, redirecting to home page");
+      if (typeof window !== 'undefined') {
+        window.location.href = '/';
+      }
+      return { chat: null, messages: [] };
+    }
+
+    const response = await fetchWithTimeout(`${API_URL}/api/direct-chats/${chatId}`, {
+      method: 'GET',
+      headers: getAuthHeaders(),
+    }, 5000);
+
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || 'Failed to fetch chat');
+    }
+
+    return response.json();
+  },
+
+  // Gửi tin nhắn và nhận phản hồi
+  sendMessage: async (chatId: string, content: string) => {
+    console.log(`Preparing to send message to chat ID: ${chatId}`);
+
+    const token = getAuthToken();
+    if (!token) {
+      console.log("No authentication token found, redirecting to home page");
+      if (typeof window !== 'undefined') {
+        window.location.href = '/';
+      }
+      return { userMessage: null, assistantMessage: null };
+    }
+
+    console.log(`Using auth token: ${token.substring(0, 10)}...`);
+    console.log(`Sending message to API: ${API_URL}/api/direct-chats/${chatId}/messages`);
+
+    try {
+      const response = await fetchWithTimeout(`${API_URL}/api/direct-chats/${chatId}/messages`, {
+        method: 'POST',
+        headers: getAuthHeaders(),
+        body: JSON.stringify({ content }),
+      }, 30000); // Tăng timeout vì có thể mất thời gian để gọi Gemini API
+
+      console.log(`Response status: ${response.status}`);
+
+      if (!response.ok) {
+        const error = await response.json();
+        console.error(`API error response:`, error);
+        throw new Error(error.error || 'Failed to send message');
+      }
+
+      const data = await response.json();
+      console.log(`Message sent successfully, received response with IDs: ${data.userMessage?.id}, ${data.assistantMessage?.id}`);
+      return data;
+    } catch (error) {
+      console.error(`Error in sendMessage:`, error);
+      throw error;
+    }
+  },
+
+  // Cập nhật tiêu đề cuộc trò chuyện
+  updateChatTitle: async (chatId: string, title: string) => {
+    const token = getAuthToken();
+    if (!token) {
+      console.log("No authentication token found, redirecting to home page");
+      if (typeof window !== 'undefined') {
+        window.location.href = '/';
+      }
+      return { chat: null };
+    }
+
+    const response = await fetchWithTimeout(`${API_URL}/api/direct-chats/${chatId}`, {
+      method: 'PUT',
+      headers: getAuthHeaders(),
+      body: JSON.stringify({ title }),
+    }, 5000);
+
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || 'Failed to update chat title');
+    }
+
+    return response.json();
+  },
+
+  // Xóa cuộc trò chuyện
+  deleteChat: async (chatId: string) => {
+    const token = getAuthToken();
+    if (!token) {
+      console.log("No authentication token found, redirecting to home page");
+      if (typeof window !== 'undefined') {
+        window.location.href = '/';
+      }
+      return { success: false };
+    }
+
+    const response = await fetchWithTimeout(`${API_URL}/api/direct-chats/${chatId}`, {
+      method: 'DELETE',
+      headers: getAuthHeaders(),
+    }, 5000);
+
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || 'Failed to delete chat');
+    }
+
+    return response.json();
+  },
+};
+
 // Helper function to get the authentication token
 export const getAuthToken = () => {
-  if (typeof window === 'undefined') return null;
+  if (typeof window === 'undefined') {
+    console.log('getAuthToken called in server-side context');
+    return null;
+  }
 
   try {
-    return localStorage.getItem('auth_token');
+    // Thử lấy token từ localStorage
+    const token = localStorage.getItem('auth_token');
+
+    if (token) {
+      console.log(`Token found in localStorage: ${token.substring(0, 10)}...`);
+      return token;
+    }
+
+    // Nếu không có token trong localStorage, thử lấy từ cookie
+    console.log('No token in localStorage, checking cookies...');
+    const getCookieValue = (name: string) => {
+      const value = `; ${document.cookie}`;
+      const parts = value.split(`; ${name}=`);
+      if (parts.length === 2) {
+        const part = parts.pop();
+        return part ? part.split(';').shift() : null;
+      }
+      return null;
+    };
+
+    const cookieToken = getCookieValue('auth_token');
+
+    if (cookieToken) {
+      console.log(`Token found in cookie: ${cookieToken.substring(0, 10)}...`);
+      // Đồng bộ lại với localStorage
+      try {
+        localStorage.setItem('auth_token', cookieToken);
+        console.log('Token from cookie synchronized to localStorage');
+      } catch (syncError) {
+        console.error('Error synchronizing token to localStorage:', syncError);
+      }
+      return cookieToken;
+    }
+
+    console.log('No authentication token found in localStorage or cookies');
+    return null;
   } catch (error) {
-    console.error('Error accessing localStorage:', error);
+    console.error('Error accessing localStorage or cookies:', error);
     return null;
   }
 };
@@ -253,8 +531,19 @@ export const getAuthToken = () => {
 // Helper function to add auth token to headers
 export const getAuthHeaders = () => {
   const token = getAuthToken();
-  return {
+
+  const headers = {
     'Content-Type': 'application/json',
     'Authorization': token ? `Bearer ${token}` : '',
+    // Thêm header để xác định client instance
+    'X-Client-Instance': `browser-${Math.random().toString(36).substring(2, 10)}`,
   };
+
+  console.log('Generated headers:', {
+    'Content-Type': headers['Content-Type'],
+    'Authorization': token ? `Bearer ${token.substring(0, 10)}...` : 'none',
+    'X-Client-Instance': headers['X-Client-Instance']
+  });
+
+  return headers;
 };
