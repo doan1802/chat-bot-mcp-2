@@ -39,21 +39,41 @@ const getUserGeminiApiKey = async (userId) => {
     const response = await fetch(`${userServiceUrl}/api/settings`, {
       method: 'GET',
       headers: {
-        'Authorization': `Bearer ${token}`
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json'
       },
       timeout: 5000
     });
+
     const duration = Date.now() - startTime;
     console.log(`User Service API response received in ${duration}ms with status: ${response.status}`);
 
     if (!response.ok) {
-      const error = await response.json();
-      console.error(`Error response from User Service: ${JSON.stringify(error)}`);
-      throw new Error(error.error || 'Failed to fetch user settings');
+      const errorText = await response.text();
+      let errorJson;
+      try {
+        errorJson = JSON.parse(errorText);
+      } catch (e) {
+        errorJson = { error: errorText };
+      }
+      console.error(`Error response from User Service: ${JSON.stringify(errorJson)}`);
+      throw new Error(errorJson.error || `Failed to fetch user settings: ${response.status}`);
     }
 
-    const data = await response.json();
-    console.log(`User settings retrieved successfully`);
+    // Đọc response body
+    const responseText = await response.text();
+    console.log(`Response body length: ${responseText.length} characters`);
+
+    // Parse JSON
+    let data;
+    try {
+      data = JSON.parse(responseText);
+      console.log(`User settings retrieved successfully`);
+    } catch (jsonError) {
+      console.error(`Error parsing JSON response: ${jsonError.message}`);
+      console.error(`Response text: ${responseText.substring(0, 200)}...`);
+      throw new Error(`Invalid JSON response from User Service`);
+    }
 
     if (!data.settings) {
       console.error(`No settings found in response: ${JSON.stringify(data)}`);
@@ -73,30 +93,82 @@ const getUserGeminiApiKey = async (userId) => {
   }
 };
 
+// Lưu trữ các phiên Gemini đang hoạt động
+// Key: userId, Value: { apiKey, model, lastActivity }
+const activeGeminiSessions = new Map();
+
+// Hàm dọn dẹp các phiên Gemini không hoạt động
+const cleanupInactiveGeminiSessions = () => {
+  const now = Date.now();
+  const inactivityThreshold = 30 * 60 * 1000; // 30 phút
+
+  for (const [userId, session] of activeGeminiSessions.entries()) {
+    if (now - session.lastActivity > inactivityThreshold) {
+      console.log(`Removing inactive Gemini session for user: ${userId}`);
+      activeGeminiSessions.delete(userId);
+    }
+  }
+};
+
+// Thiết lập dọn dẹp định kỳ
+setInterval(cleanupInactiveGeminiSessions, 5 * 60 * 1000); // Mỗi 5 phút
+
 // Hàm gọi Gemini API để lấy phản hồi
 const getGeminiResponse = async (userId, messages) => {
   console.log(`Getting Gemini response for user: ${userId} with ${messages.length} messages`);
+  const clientId = `gemini-${userId.substring(0, 8)}`;
 
   try {
-    // Lấy API key từ user settings
-    console.log(`Fetching Gemini API key for user: ${userId}`);
-    const apiKey = await getUserGeminiApiKey(userId);
-    console.log(`Successfully retrieved API key for user: ${userId}`);
+    // Kiểm tra xem có phiên Gemini đang hoạt động không
+    let geminiSession = activeGeminiSessions.get(userId);
+    let model;
 
-    // Khởi tạo Gemini client
-    const genAI = new GoogleGenerativeAI(apiKey);
-    console.log(`Initialized Gemini client`);
+    if (geminiSession) {
+      console.log(`Found existing Gemini session for user: ${userId}`);
+      model = geminiSession.model;
 
-    // Sử dụng model gemini-2.0-flash theo lệnh curl của người dùng
-    const model = genAI.getGenerativeModel({
-      model: "gemini-2.0-flash",
-      apiVersion: "v1beta"
-    });
-    console.log(`Using model: gemini-2.0-flash with API version: v1beta`);
+      // Cập nhật thời gian hoạt động
+      geminiSession.lastActivity = Date.now();
+    } else {
+      // Lấy API key từ user settings
+      console.log(`Fetching Gemini API key for user: ${userId}`);
+      const apiKey = await getUserGeminiApiKey(userId);
+      console.log(`Successfully retrieved API key for user: ${userId}`);
+
+      if (!apiKey) {
+        throw new Error('No Gemini API key available');
+      }
+
+      // Khởi tạo Gemini client
+      const genAI = new GoogleGenerativeAI(apiKey);
+      console.log(`Initialized Gemini client for user: ${userId}`);
+
+      // Sử dụng model gemini-2.0-flash theo lệnh curl của người dùng
+      model = genAI.getGenerativeModel({
+        model: "gemini-2.0-flash",
+        apiVersion: "v1beta"
+      });
+      console.log(`Using model: gemini-2.0-flash with API version: v1beta`);
+
+      // Lưu phiên Gemini
+      activeGeminiSessions.set(userId, {
+        apiKey,
+        model,
+        lastActivity: Date.now()
+      });
+
+      console.log(`Created new Gemini session for user: ${userId}`);
+    }
 
     // Chuẩn bị nội dung cho API request
     // Thay vì sử dụng chat session, chúng ta sẽ gửi tất cả tin nhắn trong một request
     const contents = [];
+
+    // Thêm system prompt
+    contents.push({
+      role: 'model',
+      parts: [{ text: `Bạn là Serna một trợ lý AI trẻ trung năng động. Bạn hãy trả lời người dùng bằng những nội dung chính xác và xác thực ` }]
+    });
 
     // Thêm tất cả tin nhắn vào contents
     for (const msg of messages) {
@@ -105,39 +177,61 @@ const getGeminiResponse = async (userId, messages) => {
         parts: [{ text: msg.content }]
       });
     }
-    console.log(`Prepared ${contents.length} messages for Gemini API`);
+    console.log(`[Client: ${clientId}] Prepared ${contents.length} messages for Gemini API (including system prompt)`);
 
     // Cấu hình generation
     const generationConfig = {
-      temperature: 0.7,
-      topP: 0.8,
-      topK: 40,
-      maxOutputTokens: 2048,
+      temperature: 0.6,      // Giảm xuống để có phản hồi tập trung hơn
+      topP: 0.9,             // Tăng lên để có phản hồi đa dạng hơn
+      topK: 40,              // Giữ nguyên
+      maxOutputTokens: 4096, // Tăng lên để có phản hồi dài hơn
     };
-    console.log(`Using generation config: temperature=${generationConfig.temperature}, topP=${generationConfig.topP}`);
+    console.log(`[Client: ${clientId}] Using generation config: temperature=${generationConfig.temperature}, topP=${generationConfig.topP}`);
 
     // Gọi API để lấy phản hồi
-    console.log(`Calling Gemini API...`);
+    console.log(`[Client: ${clientId}] Calling Gemini API...`);
     const startTime = Date.now();
-    const result = await model.generateContent({
-      contents,
-      generationConfig,
-    });
-    const duration = Date.now() - startTime;
-    console.log(`Gemini API response received in ${duration}ms`);
 
-    const response = result.response;
-    const responseText = response.text();
-    console.log(`Gemini response length: ${responseText.length} characters`);
+    try {
+      const result = await model.generateContent({
+        contents,
+        generationConfig,
+      });
 
-    return responseText;
+      const duration = Date.now() - startTime;
+      console.log(`[Client: ${clientId}] Gemini API response received in ${duration}ms`);
+
+      if (!result || !result.response) {
+        throw new Error('Empty response from Gemini API');
+      }
+
+      const response = result.response;
+      const responseText = response.text();
+      console.log(`[Client: ${clientId}] Gemini response length: ${responseText.length} characters`);
+
+      return responseText;
+    } catch (geminiError) {
+      console.error(`[Client: ${clientId}] Gemini API error:`, geminiError);
+
+      // Xóa phiên Gemini nếu có lỗi API key
+      if (geminiError.message && geminiError.message.includes('API key')) {
+        console.log(`[Client: ${clientId}] Removing invalid Gemini session for user: ${userId}`);
+        activeGeminiSessions.delete(userId);
+        throw new Error(`Invalid Gemini API key: ${geminiError.message}`);
+      }
+
+      throw new Error(`Gemini API error: ${geminiError.message}`);
+    }
   } catch (error) {
-    console.error('Error calling Gemini API:', error);
+    console.error(`[Client: ${clientId}] Error in getGeminiResponse:`, error);
+
     // Thêm thông tin chi tiết về lỗi
     if (error.response) {
-      console.error('Error response:', error.response);
+      console.error(`[Client: ${clientId}] Error response:`, error.response);
     }
-    throw new Error(`Gemini API error: ${error.message}`);
+
+    // Trả về thông báo lỗi thân thiện với người dùng
+    throw new Error(`Không thể lấy phản hồi từ Gemini API: ${error.message}. Vui lòng kiểm tra API key của bạn trong cài đặt.`);
   }
 };
 

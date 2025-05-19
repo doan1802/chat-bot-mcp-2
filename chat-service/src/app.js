@@ -1,8 +1,33 @@
 const express = require('express');
 const cors = require('cors');
+const NodeCache = require('node-cache');
 require('dotenv').config();
 
 const chatRoutes = require('./routes/chatRoutes');
+
+// Khởi tạo cache để lưu trữ thông tin chat và tin nhắn
+const chatCache = new NodeCache({ stdTTL: 300, checkperiod: 60 }); // TTL 5 phút, kiểm tra mỗi 1 phút
+const messageCache = new NodeCache({ stdTTL: 300, checkperiod: 60 }); // TTL 5 phút, kiểm tra mỗi 1 phút
+
+// Lưu trữ các phiên chat đang hoạt động
+// Key: chatId, Value: { userId, clientInstance, lastActivity, isProcessing }
+const activeChats = new Map();
+
+// Hàm dọn dẹp các phiên chat không hoạt động
+const cleanupInactiveChats = () => {
+  const now = Date.now();
+  const inactivityThreshold = 30 * 60 * 1000; // 30 phút
+
+  for (const [chatId, session] of activeChats.entries()) {
+    if (now - session.lastActivity > inactivityThreshold) {
+      console.log(`[Worker ${process.pid}] Removing inactive chat session for chat: ${chatId}, user: ${session.userId}`);
+      activeChats.delete(chatId);
+    }
+  }
+};
+
+// Thiết lập dọn dẹp định kỳ
+setInterval(cleanupInactiveChats, 5 * 60 * 1000); // Mỗi 5 phút
 
 const app = express();
 
@@ -14,6 +39,115 @@ app.use(cors({
   credentials: true
 }));
 app.use(express.json());
+
+// Middleware để xử lý đồng thời
+app.use((req, res, next) => {
+  // Thêm thông tin worker process vào response header
+  res.setHeader('X-Worker-ID', process.pid);
+
+  // Thêm timestamp để theo dõi thời gian xử lý
+  req.startTime = Date.now();
+
+  // Log request
+  console.log(`[${new Date().toISOString()}] Worker ${process.pid} - ${req.method} ${req.url}`);
+
+  // Middleware để log thời gian xử lý khi request hoàn thành
+  res.on('finish', () => {
+    const duration = Date.now() - req.startTime;
+    console.log(`[${new Date().toISOString()}] Worker ${process.pid} - ${req.method} ${req.url} completed in ${duration}ms with status ${res.statusCode}`);
+  });
+
+  next();
+});
+
+// Middleware để sử dụng cache cho các endpoint thường xuyên được gọi
+app.use('/api/chats', (req, res, next) => {
+  if (req.method === 'GET' && !req.params.chatId) {
+    const userId = req.user?.id;
+    const cacheKey = `chats_${userId}`;
+    if (userId && chatCache.has(cacheKey)) {
+      console.log(`[Worker ${process.pid}] Cache hit for user chats: ${userId}`);
+      return res.status(200).json({ chats: chatCache.get(cacheKey) });
+    }
+  }
+  next();
+});
+
+// Middleware để giới hạn số lượng request đồng thời
+const activeRequests = new Map();
+const MAX_CONCURRENT_REQUESTS = 100; // Giới hạn số lượng request đồng thời
+
+app.use((req, res, next) => {
+  const clientIp = req.ip || req.connection.remoteAddress;
+  const currentRequests = activeRequests.get(clientIp) || 0;
+
+  if (currentRequests >= MAX_CONCURRENT_REQUESTS) {
+    return res.status(429).json({ error: 'Too many requests. Please try again later.' });
+  }
+
+  activeRequests.set(clientIp, currentRequests + 1);
+
+  res.on('finish', () => {
+    const updatedRequests = activeRequests.get(clientIp) - 1;
+    if (updatedRequests <= 0) {
+      activeRequests.delete(clientIp);
+    } else {
+      activeRequests.set(clientIp, updatedRequests);
+    }
+  });
+
+  next();
+});
+
+// Middleware để quản lý phiên chat
+app.use('/api/chats/:chatId/messages', (req, res, next) => {
+  if (req.method === 'POST') {
+    const chatId = req.params.chatId;
+    const userId = req.user?.id;
+    const clientInstance = req.headers['x-client-instance'] || 'unknown-client';
+
+    // Kiểm tra xem chat này đã đang được xử lý bởi client khác không
+    if (activeChats.has(chatId)) {
+      const chatSession = activeChats.get(chatId);
+
+      // Nếu chat đang được xử lý bởi client khác
+      if (chatSession.isProcessing && chatSession.clientInstance !== clientInstance) {
+        console.log(`[Worker ${process.pid}] Chat ${chatId} is already being processed by client ${chatSession.clientInstance}`);
+        return res.status(409).json({
+          error: 'This chat is currently being processed by another session. Please try again later.'
+        });
+      }
+
+      // Cập nhật thông tin phiên chat
+      chatSession.lastActivity = Date.now();
+      chatSession.clientInstance = clientInstance;
+      chatSession.isProcessing = true;
+    } else {
+      // Tạo phiên chat mới
+      activeChats.set(chatId, {
+        userId,
+        clientInstance,
+        lastActivity: Date.now(),
+        isProcessing: true
+      });
+    }
+
+    // Middleware để đánh dấu phiên chat không còn được xử lý khi request hoàn thành
+    res.on('finish', () => {
+      if (activeChats.has(chatId)) {
+        activeChats.get(chatId).isProcessing = false;
+        activeChats.get(chatId).lastActivity = Date.now();
+      }
+    });
+  }
+
+  next();
+});
+
+// Expose cache and active chats to routes
+app.locals.chatCache = chatCache;
+app.locals.messageCache = messageCache;
+app.locals.activeChats = activeChats;
 
 // Routes
 app.use('/api/chats', chatRoutes);

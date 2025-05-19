@@ -2,31 +2,49 @@
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3000';
 
-// Helper function to add timeout to fetch
-const fetchWithTimeout = async (url: string, options: RequestInit, timeout = 10000) => {
+// Helper function to add timeout to fetch with retry logic
+const fetchWithTimeout = async (url: string, options: RequestInit, timeout = 10000, maxRetries = 2) => {
   console.log(`Fetching ${url} with method ${options.method}`);
 
-  const controller = new AbortController();
-  const id = setTimeout(() => {
-    console.log(`Request to ${url} timed out after ${timeout}ms`);
-    controller.abort();
-  }, timeout);
+  let retries = 0;
 
-  try {
-    const response = await fetch(url, {
-      ...options,
-      signal: controller.signal
-    });
+  const attemptFetch = async (): Promise<Response> => {
+    const controller = new AbortController();
+    const id = setTimeout(() => {
+      console.log(`Request to ${url} timed out after ${timeout}ms`);
+      controller.abort();
+    }, timeout);
 
-    console.log(`Response from ${url}: ${response.status}`);
+    try {
+      const response = await fetch(url, {
+        ...options,
+        signal: controller.signal
+      });
 
-    clearTimeout(id);
-    return response;
-  } catch (error) {
-    clearTimeout(id);
-    console.error(`Fetch error for ${url}:`, error);
-    throw error;
-  }
+      console.log(`Response from ${url}: ${response.status}`);
+
+      clearTimeout(id);
+      return response;
+    } catch (error: any) {
+      clearTimeout(id);
+
+      // Check if it's a timeout error (AbortError)
+      if (error.name === 'AbortError' && retries < maxRetries) {
+        retries++;
+        const waitTime = 1000 * retries; // Exponential backoff: 1s, 2s, etc.
+        console.log(`Retry ${retries}/${maxRetries} for ${url} after ${waitTime}ms`);
+
+        // Wait before retrying
+        await new Promise(resolve => setTimeout(resolve, waitTime));
+        return attemptFetch();
+      }
+
+      console.error(`Fetch error for ${url} after ${retries} retries:`, error);
+      throw error;
+    }
+  };
+
+  return attemptFetch();
 };
 
 // Auth API
@@ -161,7 +179,7 @@ export const userAPI = {
     const response = await fetchWithTimeout(`${API_URL}/api/direct-profile`, {
       method: 'GET',
       headers: getAuthHeaders(),
-    }, 5000);
+    }, 10000); // Tăng timeout lên 10 giây
 
     if (!response.ok) {
       const error = await response.json();
@@ -291,24 +309,32 @@ export const isAuthenticated = async () => {
 
   // Verify token by making a request to the profile endpoint
   try {
-    const response = await fetch(`${API_URL}/api/direct-profile`, {
+    console.log("Verifying authentication token...");
+    const response = await fetchWithTimeout(`${API_URL}/api/direct-profile`, {
       method: 'GET',
       headers: {
         'Authorization': `Bearer ${token}`
       }
-    });
+    }, 10000, 2); // 10 second timeout with 2 retries
 
     // If response is not ok, token is invalid
     if (!response.ok) {
+      console.log("Authentication token is invalid, clearing token");
       // Clear invalid token
       localStorage.removeItem('auth_token');
       document.cookie = 'auth_token=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT; SameSite=Lax';
       return false;
     }
 
+    console.log("Authentication token is valid");
     return true;
-  } catch (error) {
+  } catch (error: any) {
     console.error('Error verifying authentication:', error);
+    // Only clear token if it's not a network error
+    if (error && error.name !== 'TypeError' && error.name !== 'NetworkError') {
+      localStorage.removeItem('auth_token');
+      document.cookie = 'auth_token=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT; SameSite=Lax';
+    }
     return false;
   }
 };
@@ -389,7 +415,7 @@ export const chatAPI = {
   },
 
   // Gửi tin nhắn và nhận phản hồi
-  sendMessage: async (chatId: string, content: string) => {
+  sendMessage: async (chatId: string, content: string): Promise<{ userMessage: any, assistantMessage: any }> => {
     console.log(`Preparing to send message to chat ID: ${chatId}`);
 
     const token = getAuthToken();
@@ -416,6 +442,55 @@ export const chatAPI = {
       if (!response.ok) {
         const error = await response.json();
         console.error(`API error response:`, error);
+
+        // Xử lý lỗi 409 Conflict (chat đang được xử lý bởi phiên khác)
+        if (response.status === 409) {
+          // Đợi 2 giây và thử lại, tối đa 3 lần
+          const maxRetries = 3;
+          let retryCount = 0;
+          let retryDelay = 2000; // 2 giây
+
+          const retry = async (): Promise<{ userMessage: any, assistantMessage: any }> => {
+            retryCount++;
+            console.log(`Retry attempt ${retryCount}/${maxRetries}: Chat is being processed by another session. Waiting ${retryDelay/1000} seconds...`);
+
+            await new Promise(resolve => setTimeout(resolve, retryDelay));
+
+            try {
+              const retryResponse = await fetchWithTimeout(`${API_URL}/api/direct-chats/${chatId}/messages`, {
+                method: 'POST',
+                headers: getAuthHeaders(),
+                body: JSON.stringify({ content }),
+              }, 30000);
+
+              if (!retryResponse.ok) {
+                const retryError = await retryResponse.json();
+
+                if (retryResponse.status === 409 && retryCount < maxRetries) {
+                  // Tăng thời gian chờ mỗi lần thử lại
+                  retryDelay = retryDelay * 1.5;
+                  return retry();
+                }
+
+                throw new Error(retryError.error || 'Failed to send message after retries');
+              }
+
+              const retryData = await retryResponse.json();
+              console.log(`Message sent successfully after ${retryCount} retries`);
+              return retryData;
+            } catch (retryError) {
+              console.error(`Error in retry attempt ${retryCount}:`, retryError);
+              if (retryCount < maxRetries) {
+                retryDelay = retryDelay * 1.5;
+                return retry();
+              }
+              throw retryError;
+            }
+          };
+
+          return retry();
+        }
+
         throw new Error(error.error || 'Failed to send message');
       }
 
@@ -528,15 +603,42 @@ export const getAuthToken = () => {
   }
 };
 
+// Tạo và lưu trữ client instance ID
+const getClientInstanceId = () => {
+  if (typeof window === 'undefined') {
+    return 'server-side';
+  }
+
+  try {
+    // Kiểm tra xem đã có client instance ID trong localStorage chưa
+    let clientId = localStorage.getItem('client_instance_id');
+
+    // Nếu chưa có, tạo mới và lưu vào localStorage
+    if (!clientId) {
+      // Tạo ID dựa trên thời gian hiện tại và một số ngẫu nhiên
+      clientId = `browser-${Date.now()}-${Math.random().toString(36).substring(2, 10)}`;
+      localStorage.setItem('client_instance_id', clientId);
+      console.log(`Created new client instance ID: ${clientId}`);
+    }
+
+    return clientId;
+  } catch (error) {
+    // Nếu không thể truy cập localStorage, tạo ID tạm thời
+    console.error('Error accessing localStorage for client ID:', error);
+    return `temp-${Date.now()}`;
+  }
+};
+
 // Helper function to add auth token to headers
 export const getAuthHeaders = () => {
   const token = getAuthToken();
+  const clientInstanceId = getClientInstanceId();
 
   const headers = {
     'Content-Type': 'application/json',
     'Authorization': token ? `Bearer ${token}` : '',
-    // Thêm header để xác định client instance
-    'X-Client-Instance': `browser-${Math.random().toString(36).substring(2, 10)}`,
+    // Sử dụng client instance ID ổn định
+    'X-Client-Instance': clientInstanceId,
   };
 
   console.log('Generated headers:', {

@@ -9,4 +9,7 @@ router.get('/profile', verifyToken, userController.getUserProfile);
 // Cập nhật thông tin người dùng - yêu cầu xác thực
 router.put('/profile', verifyToken, userController.updateUserProfile);
 
+// Tạo profile cho người dùng - yêu cầu xác thực
+router.post('/profile/create', verifyToken, userController.createUserProfile);
+
 module.exports = router;

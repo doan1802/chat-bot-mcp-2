@@ -11,6 +11,10 @@ import {
     Trash2,
     MessageSquarePlus,
     Edit,
+    PanelLeftClose,
+    PanelLeftOpen,
+    ChevronLeft,
+    ChevronRight,
 } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import { chatAPI } from "@/lib/api";
@@ -102,6 +106,7 @@ export function ProfessionalChatWithGemini({ user }: ProfessionalChatProps) {
     const [isLoadingChats, setIsLoadingChats] = useState(false);
     const [isLoadingMessages, setIsLoadingMessages] = useState(false);
     const [error, setError] = useState<string | null>(null);
+    const [isSidebarVisible, setIsSidebarVisible] = useState(true);
 
     const messagesEndRef = useRef<HTMLDivElement>(null);
     const { textareaRef, adjustHeight } = useAutoResizeTextarea({
@@ -317,59 +322,92 @@ export function ProfessionalChatWithGemini({ user }: ProfessionalChatProps) {
     // Render danh sách cuộc trò chuyện
     const renderChatList = () => {
         return (
-            <div className="w-56 h-full bg-zinc-900/80 border-r border-white/10 overflow-y-auto">
-                <div className="p-4">
-                    <button
+            <motion.div
+                className="h-full overflow-hidden flex flex-col"
+                initial={{ width: 280 }}
+                animate={{
+                    width: isSidebarVisible ? 280 : 0,
+                    opacity: isSidebarVisible ? 1 : 0
+                }}
+                transition={{ duration: 0.3, ease: "easeInOut" }}
+            >
+                <div className="flex items-center justify-between p-4 border-b border-white/10">
+                    <h2 className="font-medium text-white/90">Chat history</h2>
+                    <motion.button
+                        onClick={() => setIsSidebarVisible(false)}
+                        className="p-1.5 rounded-md hover:bg-white/10 text-white/70 hover:text-white/90 transition-colors"
+                        whileHover={{ scale: 1.05 }}
+                        whileTap={{ scale: 0.95 }}
+                    >
+                        <ChevronLeft size={18} />
+                    </motion.button>
+                </div>
+                <div className="p-3">
+                    <motion.button
                         onClick={createNewChat}
-                        className="w-full flex items-center justify-center gap-2 py-2 px-4 bg-white/10 hover:bg-white/20 rounded-lg transition-colors"
+                        className="w-full flex items-center justify-center gap-2 py-2.5 px-4 bg-white/10 hover:bg-white/20 rounded-lg transition-colors"
+                        whileHover={{ scale: 1.02 }}
+                        whileTap={{ scale: 0.98 }}
                     >
                         <MessageSquarePlus size={16} />
-                        <span>New Chat</span>
-                    </button>
+                        <span className="font-medium">New chat</span>
+                    </motion.button>
                 </div>
-                <div className="px-2">
-                    {chats.map(chat => (
-                        <div
-                            key={chat.id}
-                            className={cn(
-                                "p-2 rounded-lg mb-1 cursor-pointer hover:bg-white/10 transition-colors flex items-center justify-between",
-                                currentChatId === chat.id ? "bg-white/10" : ""
-                            )}
-                            onClick={() => {
-                                setCurrentChatId(chat.id);
-                                loadMessages(chat.id);
-                            }}
-                        >
-                            <div className="truncate flex-1">{chat.title}</div>
-                            <div className="flex items-center">
-                                <button
-                                    onClick={(e) => {
-                                        e.stopPropagation();
-                                        const newTitle = prompt("Enter new title:", chat.title);
-                                        if (newTitle) {
-                                            updateChatTitle(chat.id, newTitle);
-                                        }
-                                    }}
-                                    className="p-1 text-white/50 hover:text-white transition-colors"
-                                >
-                                    <Edit size={14} />
-                                </button>
-                                <button
-                                    onClick={(e) => {
-                                        e.stopPropagation();
-                                        if (confirm("Are you sure you want to delete this chat?")) {
-                                            deleteChat(chat.id);
-                                        }
-                                    }}
-                                    className="p-1 text-white/50 hover:text-white transition-colors"
-                                >
-                                    <Trash2 size={14} />
-                                </button>
-                            </div>
+                <div className="flex-1 overflow-y-auto px-2 py-2 scrollbar-thin scrollbar-thumb-transparent scrollbar-track-transparent">
+                    {chats.length === 0 ? (
+                        <div className="text-center py-6 text-white/50 text-sm">
+                            No thing
                         </div>
-                    ))}
+                    ) : (
+                        chats.map(chat => (
+                            <motion.div
+                                key={chat.id}
+                                className={cn(
+                                    "p-3 rounded-lg mb-2 cursor-pointer hover:bg-white/10 transition-colors flex items-center justify-between",
+                                    currentChatId === chat.id ? "bg-white/10 border-l-2 border-blue-500" : ""
+                                )}
+                                onClick={() => {
+                                    setCurrentChatId(chat.id);
+                                    loadMessages(chat.id);
+                                }}
+                                whileHover={{ x: 2 }}
+                                whileTap={{ scale: 0.98 }}
+                            >
+                                <div className="truncate flex-1 font-medium">{chat.title}</div>
+                                <div className="flex items-center gap-1">
+                                    <motion.button
+                                        onClick={(e) => {
+                                            e.stopPropagation();
+                                            const newTitle = prompt("Nhập tiêu đề mới:", chat.title);
+                                            if (newTitle) {
+                                                updateChatTitle(chat.id, newTitle);
+                                            }
+                                        }}
+                                        className="p-1.5 rounded-md text-white/50 hover:text-white hover:bg-white/10 transition-colors"
+                                        whileHover={{ scale: 1.1 }}
+                                        whileTap={{ scale: 0.9 }}
+                                    >
+                                        <Edit size={14} />
+                                    </motion.button>
+                                    <motion.button
+                                        onClick={(e) => {
+                                            e.stopPropagation();
+                                            if (confirm("Bạn có chắc chắn muốn xóa cuộc trò chuyện này?")) {
+                                                deleteChat(chat.id);
+                                            }
+                                        }}
+                                        className="p-1.5 rounded-md text-white/50 hover:text-red-400 hover:bg-white/10 transition-colors"
+                                        whileHover={{ scale: 1.1 }}
+                                        whileTap={{ scale: 0.9 }}
+                                    >
+                                        <Trash2 size={14} />
+                                    </motion.button>
+                                </div>
+                            </motion.div>
+                        ))
+                    )}
                 </div>
-            </div>
+            </motion.div>
         );
     };
 
@@ -469,19 +507,48 @@ export function ProfessionalChatWithGemini({ user }: ProfessionalChatProps) {
             ) : (
                 // Chat mode with history and fixed input at bottom
                 <div className="flex h-full">
-                    {/* Chat list sidebar */}
-                    {renderChatList()}
+                    {/* Chat list sidebar - fixed position */}
+                    <div className="fixed top-[70px] left-0 h-[calc(100vh-70px)] z-10">
+                        {renderChatList()}
+                    </div>
 
-                    {/* Chat content */}
-                    <div className="flex-1 flex flex-col relative">
-                        <motion.div
-                            className="flex flex-col h-full w-full"
-                            initial={{ opacity: 0 }}
-                            animate={{ opacity: 1 }}
-                            transition={{ duration: 0.5 }}
+                    {/* Nút hiện sidebar khi đã ẩn */}
+                    {!isSidebarVisible && (
+                        <motion.button
+                            onClick={() => setIsSidebarVisible(true)}
+                            className="fixed left-6 top-20 z-20 p-2 rounded-md bg-zinc-800/90 hover:bg-zinc-700/90 text-white/70 hover:text-white/90 transition-colors shadow-md"
+                            initial={{ opacity: 0, x: -10 }}
+                            animate={{ opacity: 1, x: 0 }}
+                            transition={{ duration: 0.3 }}
+                            whileHover={{ scale: 1.05 }}
+                            whileTap={{ scale: 0.95 }}
                         >
+                            <ChevronRight size={18} />
+                        </motion.button>
+                    )}
+
+                    {/* Chat content - full width */}
+                    <div className="w-full flex flex-col relative">
+                        <div className="w-full max-w-4xl mx-auto px-4">
+                            <motion.div
+                                className="flex flex-col h-full w-full"
+                                initial={{ opacity: 0 }}
+                                animate={{ opacity: 1 }}
+                                transition={{ duration: 0.5 }}
+                            >
                             {/* Chat history - scrollable area with fixed height */}
-                            <div className="h-[calc(100vh-220px)] overflow-y-auto px-4 py-4 pb-20 scrollbar-none max-w-5xl mx-auto">
+                            <motion.div
+                                className="h-[calc(100vh-220px)] overflow-y-auto py-4 pb-20 w-full hide-scrollbar"
+                                style={{
+                                    maxWidth: "4xl",
+                                    marginLeft: "auto",
+                                    marginRight: "auto",
+                                    paddingLeft: "1rem",
+                                    paddingRight: "1rem"
+                                }}
+                                transition={{ duration: 0.3 }}
+                                layout
+                            >
                                 {isLoadingMessages ? (
                                     <div className="flex justify-center items-center h-full">
                                         <div className="flex space-x-2">
@@ -495,10 +562,7 @@ export function ProfessionalChatWithGemini({ user }: ProfessionalChatProps) {
                                         {messages.map((message, index) => (
                                             <motion.div
                                                 key={message.id}
-                                                className={cn(
-                                                    "flex mb-6",
-                                                    message.role === "user" ? "justify-end" : "justify-start"
-                                                )}
+                                                className="flex mb-6 w-full"
                                                 initial={{ opacity: 0, y: 20, scale: 0.95 }}
                                                 animate={{ opacity: 1, y: 0, scale: 1 }}
                                                 transition={{
@@ -511,7 +575,7 @@ export function ProfessionalChatWithGemini({ user }: ProfessionalChatProps) {
                                             >
                                                 <div
                                                     className={cn(
-                                                        "flex items-start gap-3 max-w-[85%]",
+                                                        "flex items-start gap-3 w-full",
                                                         message.role === "user" ? "flex-row-reverse" : "flex-row"
                                                     )}
                                                 >
@@ -540,7 +604,7 @@ export function ProfessionalChatWithGemini({ user }: ProfessionalChatProps) {
                                                     >
                                                         {message.role === "user" ? "U" : "A"}
                                                     </motion.div>
-                                                    <div>
+                                                    <div className="flex flex-col" style={{ maxWidth: "70%", minWidth: "200px", width: "auto" }}>
                                                         <motion.div
                                                             className={cn(
                                                                 "rounded-lg p-4 text-base",
@@ -635,27 +699,18 @@ export function ProfessionalChatWithGemini({ user }: ProfessionalChatProps) {
                                 </AnimatePresence>
 
                                 <div ref={messagesEndRef} />
-                            </div>
+                            </motion.div>
                         </motion.div>
 
-                        {/* Fixed chat input at bottom - absolutely positioned */}
-                        <motion.div
-                            className="fixed bottom-0 left-56 right-0 z-10 pb-6"
-                            initial={{ y: 20, opacity: 0 }}
-                            animate={{ y: 0, opacity: 1 }}
-                            transition={{
-                                duration: 0.5,
-                                type: "spring",
-                                stiffness: 100,
-                                damping: 15
-                            }}
-                        >
-                            <div className="max-w-4xl mx-auto px-4 py-4 bg-transparent">
+                        {/* Fixed chat input at bottom */}
+                            <div className="fixed bottom-0 z-10 pb-6 w-full max-w-4xl" style={{ left: "50%", transform: "translateX(-50%)" }}>
+                                <div className="w-full py-4 bg-transparent">
                                 <motion.div
                                     className="relative backdrop-blur-md bg-zinc-800/60 rounded-xl border border-white/10"
                                     initial={{ backgroundColor: "rgba(39, 39, 42, 0.6)" }}
                                     whileHover={{ boxShadow: "0 0 15px rgba(255, 255, 255, 0.1)" }}
                                     transition={{ duration: 0.3 }}
+                                    layout
                                 >
                                     <div className="overflow-y-auto">
                                         <Textarea
@@ -736,7 +791,8 @@ export function ProfessionalChatWithGemini({ user }: ProfessionalChatProps) {
                                     </div>
                                 </motion.div>
                             </div>
-                        </motion.div>
+                            </div>
+                        </div>
                     </div>
                 </div>
             )}
