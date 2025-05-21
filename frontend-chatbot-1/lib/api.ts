@@ -2,15 +2,53 @@
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3000';
 
-// Helper function to add timeout to fetch with retry logic
+// Helper function to add timeout to fetch with retry logic and caching
 const fetchWithTimeout = async (url: string, options: RequestInit, timeout = 10000, maxRetries = 2) => {
-  console.log(`Fetching ${url} with method ${options.method}`);
+  // Chỉ log trong môi trường phát triển và không phải health check
+  if (process.env.NODE_ENV === 'development' && !url.includes('/health')) {
+    console.log(`Fetching ${url} with method ${options.method}`);
+  }
+
+  // Sử dụng cache cho các GET request
+  if (options.method === 'GET' && typeof window !== 'undefined' && 'caches' in window) {
+    try {
+      // Tạo cache key từ URL và headers
+      const cacheKey = `${url}-${JSON.stringify(options.headers || {})}`;
+
+      // Kiểm tra cache trong sessionStorage
+      const cachedData = sessionStorage.getItem(cacheKey);
+      if (cachedData) {
+        const { data, timestamp } = JSON.parse(cachedData);
+        const cacheAge = Date.now() - timestamp;
+
+        // Sử dụng cache nếu chưa quá 30 giây
+        if (cacheAge < 30000) { // 30 seconds
+          // Loại bỏ log cache không cần thiết
+
+          // Tạo response giả từ cache
+          const cachedResponse = new Response(JSON.stringify(data), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' }
+          });
+
+          // Thêm thuộc tính để đánh dấu đây là response từ cache
+          Object.defineProperty(cachedResponse, 'fromCache', { value: true });
+
+          return cachedResponse;
+        }
+      }
+    } catch (cacheError) {
+      console.error('Cache error:', cacheError);
+      // Tiếp tục với request bình thường nếu có lỗi cache
+    }
+  }
 
   let retries = 0;
 
   const attemptFetch = async (): Promise<Response> => {
     const controller = new AbortController();
     const id = setTimeout(() => {
+      // Luôn log timeout vì đây là lỗi quan trọng
       console.log(`Request to ${url} timed out after ${timeout}ms`);
       controller.abort();
     }, timeout);
@@ -21,9 +59,33 @@ const fetchWithTimeout = async (url: string, options: RequestInit, timeout = 100
         signal: controller.signal
       });
 
-      console.log(`Response from ${url}: ${response.status}`);
+      // Chỉ log response không thành công hoặc trong môi trường phát triển
+      if (!response.ok || process.env.NODE_ENV === 'development') {
+        console.log(`Response from ${url}: ${response.status}`);
+      }
 
       clearTimeout(id);
+
+      // Lưu vào cache nếu là GET request thành công
+      if (options.method === 'GET' && response.ok && typeof window !== 'undefined' && 'sessionStorage' in window) {
+        try {
+          const responseClone = response.clone();
+          const data = await responseClone.json();
+
+          // Tạo cache key từ URL và headers
+          const cacheKey = `${url}-${JSON.stringify(options.headers || {})}`;
+
+          // Lưu vào sessionStorage với timestamp
+          sessionStorage.setItem(cacheKey, JSON.stringify({
+            data,
+            timestamp: Date.now()
+          }));
+        } catch (cacheError) {
+          console.error('Error caching response:', cacheError);
+          // Tiếp tục xử lý response bình thường nếu có lỗi cache
+        }
+      }
+
       return response;
     } catch (error: any) {
       clearTimeout(id);
@@ -31,7 +93,9 @@ const fetchWithTimeout = async (url: string, options: RequestInit, timeout = 100
       // Check if it's a timeout error (AbortError)
       if (error.name === 'AbortError' && retries < maxRetries) {
         retries++;
-        const waitTime = 1000 * retries; // Exponential backoff: 1s, 2s, etc.
+        const waitTime = 1000 * Math.pow(2, retries - 1); // Exponential backoff: 1s, 2s, 4s, etc.
+
+        // Luôn log retry vì đây là thông tin quan trọng về lỗi
         console.log(`Retry ${retries}/${maxRetries} for ${url} after ${waitTime}ms`);
 
         // Wait before retrying
@@ -51,7 +115,11 @@ const fetchWithTimeout = async (url: string, options: RequestInit, timeout = 100
 export const authAPI = {
   // Đăng ký người dùng mới
   register: async (email: string, password: string, fullName: string) => {
-    console.log("Sending registration request to API Gateway...");
+    // Chỉ log trong môi trường phát triển
+    if (process.env.NODE_ENV === 'development') {
+      console.log("Sending registration request to API Gateway...");
+    }
+
     const response = await fetchWithTimeout(`${API_URL}/api/direct-register`, {
       method: 'POST',
       headers: {
@@ -62,18 +130,26 @@ export const authAPI = {
 
     if (!response.ok) {
       const error = await response.json();
+      // Luôn log lỗi đăng ký
       console.error("Registration error response:", error);
       throw new Error(error.error || 'Registration failed');
     }
 
     const data = await response.json();
-    console.log("Registration successful:", data);
+    // Chỉ log thành công trong môi trường phát triển
+    if (process.env.NODE_ENV === 'development') {
+      console.log("Registration successful");
+    }
     return data;
   },
 
   // Login
   login: async (email: string, password: string) => {
-    console.log("Sending login request to API Gateway...");
+    // Chỉ log trong môi trường phát triển
+    if (process.env.NODE_ENV === 'development') {
+      console.log("Sending login request to API Gateway...");
+    }
+
     const response = await fetchWithTimeout(`${API_URL}/api/direct-login`, {
       method: 'POST',
       headers: {
@@ -84,6 +160,8 @@ export const authAPI = {
 
     if (!response.ok) {
       const error = await response.json();
+      // Luôn log lỗi đăng nhập
+      console.error("Login error:", error.error || 'Login failed');
       throw new Error(error.error || 'Login failed');
     }
 
@@ -416,7 +494,7 @@ export const chatAPI = {
 
   // Gửi tin nhắn và nhận phản hồi
   sendMessage: async (chatId: string, content: string): Promise<{ userMessage: any, assistantMessage: any }> => {
-    console.log(`Preparing to send message to chat ID: ${chatId}`);
+      // Loại bỏ log không cần thiết
 
     const token = getAuthToken();
     if (!token) {
@@ -427,48 +505,80 @@ export const chatAPI = {
       return { userMessage: null, assistantMessage: null };
     }
 
-    console.log(`Using auth token: ${token.substring(0, 10)}...`);
-    console.log(`Sending message to API: ${API_URL}/api/direct-chats/${chatId}/messages`);
+    // Tạo một ID duy nhất cho request này để theo dõi
+    const requestId = `req-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
+
+    // Loại bỏ log không cần thiết
 
     try {
+      // Tăng timeout lên 45 giây để xử lý các request lâu hơn
+      // Tạo headers với X-Request-ID chỉ khi cần thiết
+      const headers: Record<string, string> = {
+        ...getAuthHeaders()
+      };
+
+      // Chỉ thêm X-Request-ID trong môi trường phát triển để tránh vấn đề CORS
+      if (process.env.NODE_ENV === 'development') {
+        headers['X-Request-ID'] = requestId;
+      }
+
       const response = await fetchWithTimeout(`${API_URL}/api/direct-chats/${chatId}/messages`, {
         method: 'POST',
-        headers: getAuthHeaders(),
+        headers,
         body: JSON.stringify({ content }),
-      }, 30000); // Tăng timeout vì có thể mất thời gian để gọi Gemini API
+      }, 45000); // Tăng timeout vì có thể mất thời gian để gọi Gemini API
 
-      console.log(`Response status: ${response.status}`);
+      // Chỉ log response không thành công hoặc trong môi trường phát triển
+      if (!response.ok || process.env.NODE_ENV === 'development') {
+        console.log(`[${requestId}] Response status: ${response.status}`);
+      }
 
       if (!response.ok) {
         const error = await response.json();
-        console.error(`API error response:`, error);
+
+        if (process.env.NODE_ENV === 'development') {
+          console.error(`[${requestId}] API error response:`, error);
+        }
 
         // Xử lý lỗi 409 Conflict (chat đang được xử lý bởi phiên khác)
         if (response.status === 409) {
-          // Đợi 2 giây và thử lại, tối đa 3 lần
-          const maxRetries = 3;
+          // Cải thiện cơ chế retry với backoff thông minh hơn
+          const maxRetries = 4; // Tăng số lần thử lại
           let retryCount = 0;
-          let retryDelay = 2000; // 2 giây
+          let retryDelay = 1500; // Bắt đầu với 1.5 giây
 
           const retry = async (): Promise<{ userMessage: any, assistantMessage: any }> => {
             retryCount++;
-            console.log(`Retry attempt ${retryCount}/${maxRetries}: Chat is being processed by another session. Waiting ${retryDelay/1000} seconds...`);
+
+            if (process.env.NODE_ENV === 'development') {
+              console.log(`[${requestId}] Retry attempt ${retryCount}/${maxRetries}: Chat is being processed by another session. Waiting ${retryDelay/1000} seconds...`);
+            }
 
             await new Promise(resolve => setTimeout(resolve, retryDelay));
 
             try {
+              // Tạo headers cho retry request
+              const retryHeaders: Record<string, string> = {
+                ...getAuthHeaders()
+              };
+
+              // Chỉ thêm X-Request-ID trong môi trường phát triển để tránh vấn đề CORS
+              if (process.env.NODE_ENV === 'development') {
+                retryHeaders['X-Request-ID'] = `${requestId}-retry-${retryCount}`;
+              }
+
               const retryResponse = await fetchWithTimeout(`${API_URL}/api/direct-chats/${chatId}/messages`, {
                 method: 'POST',
-                headers: getAuthHeaders(),
+                headers: retryHeaders,
                 body: JSON.stringify({ content }),
-              }, 30000);
+              }, 45000);
 
               if (!retryResponse.ok) {
                 const retryError = await retryResponse.json();
 
                 if (retryResponse.status === 409 && retryCount < maxRetries) {
-                  // Tăng thời gian chờ mỗi lần thử lại
-                  retryDelay = retryDelay * 1.5;
+                  // Tăng thời gian chờ mỗi lần thử lại với backoff thông minh hơn
+                  retryDelay = Math.min(retryDelay * 1.5, 10000); // Tối đa 10 giây
                   return retry();
                 }
 
@@ -476,12 +586,16 @@ export const chatAPI = {
               }
 
               const retryData = await retryResponse.json();
-              console.log(`Message sent successfully after ${retryCount} retries`);
+
+              if (process.env.NODE_ENV === 'development') {
+                console.log(`[${requestId}] Message sent successfully after ${retryCount} retries`);
+              }
+
               return retryData;
             } catch (retryError) {
-              console.error(`Error in retry attempt ${retryCount}:`, retryError);
+              console.error(`[${requestId}] Error in retry attempt ${retryCount}:`, retryError);
               if (retryCount < maxRetries) {
-                retryDelay = retryDelay * 1.5;
+                retryDelay = Math.min(retryDelay * 1.5, 10000); // Tối đa 10 giây
                 return retry();
               }
               throw retryError;
@@ -495,7 +609,9 @@ export const chatAPI = {
       }
 
       const data = await response.json();
-      console.log(`Message sent successfully, received response with IDs: ${data.userMessage?.id}, ${data.assistantMessage?.id}`);
+
+      // Loại bỏ log không cần thiết
+
       return data;
     } catch (error) {
       console.error(`Error in sendMessage:`, error);
@@ -565,12 +681,14 @@ export const getAuthToken = () => {
     const token = localStorage.getItem('auth_token');
 
     if (token) {
-      console.log(`Token found in localStorage: ${token.substring(0, 10)}...`);
+      // Loại bỏ log token không cần thiết
       return token;
     }
 
     // Nếu không có token trong localStorage, thử lấy từ cookie
-    console.log('No token in localStorage, checking cookies...');
+    if (process.env.NODE_ENV === 'development') {
+      console.log('No token in localStorage, checking cookies...');
+    }
     const getCookieValue = (name: string) => {
       const value = `; ${document.cookie}`;
       const parts = value.split(`; ${name}=`);
@@ -584,18 +702,21 @@ export const getAuthToken = () => {
     const cookieToken = getCookieValue('auth_token');
 
     if (cookieToken) {
-      console.log(`Token found in cookie: ${cookieToken.substring(0, 10)}...`);
       // Đồng bộ lại với localStorage
       try {
         localStorage.setItem('auth_token', cookieToken);
-        console.log('Token from cookie synchronized to localStorage');
+        if (process.env.NODE_ENV === 'development') {
+          console.log('Token from cookie synchronized to localStorage');
+        }
       } catch (syncError) {
         console.error('Error synchronizing token to localStorage:', syncError);
       }
       return cookieToken;
     }
 
-    console.log('No authentication token found in localStorage or cookies');
+    if (process.env.NODE_ENV === 'development') {
+      console.log('No authentication token found in localStorage or cookies');
+    }
     return null;
   } catch (error) {
     console.error('Error accessing localStorage or cookies:', error);
@@ -603,10 +724,19 @@ export const getAuthToken = () => {
   }
 };
 
+// Biến để lưu trữ ID trong suốt phiên làm việc
+// Đảm bảo ID không thay đổi ngay cả khi localStorage không hoạt động
+let runtimeClientId: string | null = null;
+
 // Tạo và lưu trữ client instance ID
 const getClientInstanceId = () => {
   if (typeof window === 'undefined') {
     return 'server-side';
+  }
+
+  // Nếu đã có ID trong runtime, sử dụng nó
+  if (runtimeClientId) {
+    return runtimeClientId;
   }
 
   try {
@@ -615,17 +745,33 @@ const getClientInstanceId = () => {
 
     // Nếu chưa có, tạo mới và lưu vào localStorage
     if (!clientId) {
-      // Tạo ID dựa trên thời gian hiện tại và một số ngẫu nhiên
-      clientId = `browser-${Date.now()}-${Math.random().toString(36).substring(2, 10)}`;
-      localStorage.setItem('client_instance_id', clientId);
-      console.log(`Created new client instance ID: ${clientId}`);
+      // Tạo ID dựa trên thời gian hiện tại, user agent và một số ngẫu nhiên để tăng tính duy nhất
+      const userAgent = window.navigator.userAgent || '';
+      const timestamp = Date.now();
+      const random = Math.random().toString(36).substring(2, 10);
+      clientId = `browser-${timestamp}-${random}-${userAgent.length % 100}`;
+
+      try {
+        localStorage.setItem('client_instance_id', clientId);
+        if (process.env.NODE_ENV === 'development') {
+          console.log(`Created new client instance ID: ${clientId}`);
+        }
+      } catch (storageError) {
+        console.error('Error saving to localStorage:', storageError);
+        // Vẫn sử dụng ID đã tạo ngay cả khi không lưu được vào localStorage
+      }
     }
 
+    // Lưu vào biến static để sử dụng lại
+    runtimeClientId = clientId;
     return clientId;
   } catch (error) {
-    // Nếu không thể truy cập localStorage, tạo ID tạm thời
+    // Nếu không thể truy cập localStorage, tạo ID tạm thời và lưu vào biến static
     console.error('Error accessing localStorage for client ID:', error);
-    return `temp-${Date.now()}`;
+    if (!runtimeClientId) {
+      runtimeClientId = `temp-${Date.now()}-${Math.random().toString(36).substring(2, 10)}`;
+    }
+    return runtimeClientId;
   }
 };
 
@@ -634,18 +780,24 @@ export const getAuthHeaders = () => {
   const token = getAuthToken();
   const clientInstanceId = getClientInstanceId();
 
-  const headers = {
+  // Đảm bảo clientInstanceId không bao giờ là undefined hoặc null
+  const safeClientId = clientInstanceId || `fallback-${Date.now()}`;
+
+  const headers: Record<string, string> = {
     'Content-Type': 'application/json',
     'Authorization': token ? `Bearer ${token}` : '',
     // Sử dụng client instance ID ổn định
-    'X-Client-Instance': clientInstanceId,
+    'X-Client-Instance': safeClientId,
   };
 
-  console.log('Generated headers:', {
-    'Content-Type': headers['Content-Type'],
-    'Authorization': token ? `Bearer ${token.substring(0, 10)}...` : 'none',
-    'X-Client-Instance': headers['X-Client-Instance']
-  });
+  // Chỉ log headers trong môi trường phát triển
+  if (process.env.NODE_ENV === 'development') {
+    console.log('Generated headers:', {
+      'Content-Type': headers['Content-Type'],
+      'Authorization': token ? 'Bearer [MASKED]' : 'none',
+      'X-Client-Instance': headers['X-Client-Instance']
+    });
+  }
 
   return headers;
 };

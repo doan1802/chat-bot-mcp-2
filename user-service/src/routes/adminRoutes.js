@@ -3,12 +3,87 @@ const router = express.Router();
 const supabase = require('../config/supabase');
 const verifyAdminToken = require('../middleware/verifyAdminToken');
 
+// Lấy thông tin profile của người dùng với quyền admin
+router.get('/profiles/:userId', verifyAdminToken, async (req, res) => {
+  try {
+    const userId = req.params.userId;
+    const userEmail = req.headers['x-user-email'];
+    const requestId = req.headers['x-request-id'] || 'unknown';
+
+    console.log(`[ADMIN] [${requestId}] Getting profile for user: ${userId} (${userEmail})`);
+
+    // Lấy thông tin profile từ bảng profiles với quyền admin
+    const { data, error } = await supabase
+      .from('profiles')
+      .select('*')
+      .eq('id', userId)
+      .limit(1);
+
+    if (error) {
+      console.error(`[ADMIN] [${requestId}] Error getting profile for user ${userId}:`, error);
+      return res.status(400).json({ error: error.message });
+    }
+
+    if (!data || data.length === 0) {
+      console.log(`[ADMIN] [${requestId}] No profile found for user: ${userId}`);
+      return res.status(404).json({ error: 'User profile not found' });
+    }
+
+    // Cập nhật cache nếu có
+    const userCache = req.app.locals.userCache;
+    if (userCache) {
+      console.log(`[ADMIN] [${requestId}] Updating cache for user: ${userId}`);
+      userCache.set(userId, data[0]);
+    }
+
+    console.log(`[ADMIN] [${requestId}] Successfully retrieved profile for user: ${userId}`);
+    return res.status(200).json({ profile: data[0] });
+  } catch (error) {
+    console.error(`[ADMIN] Get user profile error for user ${req.params.userId}:`, error);
+    return res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// API để cập nhật cache
+router.post('/cache/update', verifyAdminToken, async (req, res) => {
+  try {
+    const { type, userId, data } = req.body;
+
+    if (!type || !userId || !data) {
+      return res.status(400).json({ error: 'Missing required parameters' });
+    }
+
+    console.log(`[ADMIN] Cache update request for ${type}, user: ${userId}`);
+
+    if (type === 'profile') {
+      const userCache = req.app.locals.userCache;
+      if (userCache) {
+        userCache.set(userId, data);
+        console.log(`[ADMIN] Profile cache updated for user: ${userId}`);
+      }
+    } else if (type === 'settings') {
+      const settingsCache = req.app.locals.settingsCache;
+      if (settingsCache) {
+        settingsCache.set(userId, data);
+        console.log(`[ADMIN] Settings cache updated for user: ${userId}`);
+      }
+    } else {
+      return res.status(400).json({ error: 'Invalid cache type' });
+    }
+
+    return res.status(200).json({ message: 'Cache updated successfully' });
+  } catch (error) {
+    console.error(`[ADMIN] Cache update error:`, error);
+    return res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
 // Lấy thông tin cài đặt của người dùng với quyền admin
 router.get('/settings/:userId', verifyAdminToken, async (req, res) => {
   try {
     const userId = req.params.userId;
     const userEmail = req.headers['x-user-email'];
-    
+
     console.log(`[ADMIN] Getting settings for user: ${userId} (${userEmail})`);
 
     // Lấy thông tin settings từ bảng settings với quyền admin
@@ -25,12 +100,12 @@ router.get('/settings/:userId', verifyAdminToken, async (req, res) => {
 
     if (!data || data.length === 0) {
       console.log(`[ADMIN] No settings found for user: ${userId}, creating new settings`);
-      
+
       // Nếu không tìm thấy, tạo mới settings cho người dùng
       const { data: newSettings, error: createError } = await supabase
         .from('settings')
         .insert([
-          { 
+          {
             user_id: userId,
             theme: 'dark',
             language: 'en',
@@ -71,7 +146,7 @@ router.put('/settings/:userId', verifyAdminToken, async (req, res) => {
     const userId = req.params.userId;
     const userEmail = req.headers['x-user-email'];
     const { theme, language, gemini_api_key, vapi_api_key, raper_url } = req.body;
-    
+
     console.log(`[ADMIN] Updating settings for user: ${userId} (${userEmail})`);
 
     // Cập nhật thông tin settings

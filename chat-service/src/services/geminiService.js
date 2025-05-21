@@ -179,17 +179,23 @@ const getGeminiResponse = async (userId, messages) => {
     }
     console.log(`[Client: ${clientId}] Prepared ${contents.length} messages for Gemini API (including system prompt)`);
 
-    // Cấu hình generation
+    // Cấu hình generation tối ưu cho tốc độ phản hồi
     const generationConfig = {
-      temperature: 0.6,      // Giảm xuống để có phản hồi tập trung hơn
-      topP: 0.9,             // Tăng lên để có phản hồi đa dạng hơn
-      topK: 40,              // Giữ nguyên
-      maxOutputTokens: 4096, // Tăng lên để có phản hồi dài hơn
+      temperature: 0.5,      // Giảm xuống để có phản hồi tập trung và nhanh hơn
+      topP: 0.85,            // Điều chỉnh để cân bằng giữa tốc độ và đa dạng
+      topK: 30,              // Giảm xuống để tăng tốc độ
+      maxOutputTokens: 2048, // Giảm xuống để tăng tốc độ phản hồi ban đầu
     };
-    console.log(`[Client: ${clientId}] Using generation config: temperature=${generationConfig.temperature}, topP=${generationConfig.topP}`);
+    // Chỉ log trong môi trường phát triển
+    if (process.env.NODE_ENV === 'development') {
+      console.log(`[Client: ${clientId}] Using generation config: temperature=${generationConfig.temperature}, topP=${generationConfig.topP}`);
+    }
 
     // Gọi API để lấy phản hồi
-    console.log(`[Client: ${clientId}] Calling Gemini API...`);
+    // Chỉ log trong môi trường phát triển hoặc khi bắt đầu gọi API
+    if (process.env.NODE_ENV === 'development') {
+      console.log(`[Client: ${clientId}] Calling Gemini API...`);
+    }
     const startTime = Date.now();
 
     try {
@@ -199,6 +205,7 @@ const getGeminiResponse = async (userId, messages) => {
       });
 
       const duration = Date.now() - startTime;
+      // Log thời gian phản hồi để theo dõi hiệu suất
       console.log(`[Client: ${clientId}] Gemini API response received in ${duration}ms`);
 
       if (!result || !result.response) {
@@ -207,7 +214,10 @@ const getGeminiResponse = async (userId, messages) => {
 
       const response = result.response;
       const responseText = response.text();
-      console.log(`[Client: ${clientId}] Gemini response length: ${responseText.length} characters`);
+      // Chỉ log độ dài phản hồi trong môi trường phát triển
+      if (process.env.NODE_ENV === 'development') {
+        console.log(`[Client: ${clientId}] Gemini response length: ${responseText.length} characters`);
+      }
 
       return responseText;
     } catch (geminiError) {

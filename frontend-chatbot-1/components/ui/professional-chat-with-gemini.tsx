@@ -7,12 +7,9 @@ import {
     ArrowUpIcon,
     Paperclip,
     PlusIcon,
-    Send,
     Trash2,
     MessageSquarePlus,
     Edit,
-    PanelLeftClose,
-    PanelLeftOpen,
     ChevronLeft,
     ChevronRight,
 } from "lucide-react";
@@ -107,6 +104,12 @@ export function ProfessionalChatWithGemini({ user }: ProfessionalChatProps) {
     const [isLoadingMessages, setIsLoadingMessages] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const [isSidebarVisible, setIsSidebarVisible] = useState(true);
+    const [isRenameModalOpen, setIsRenameModalOpen] = useState(false);
+    const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
+    const [selectedChatId, setSelectedChatId] = useState<string | null>(null);
+    const [selectedChatTitle, setSelectedChatTitle] = useState<string>("");
+    const [newChatTitle, setNewChatTitle] = useState<string>("");
+    const [isProcessing, setIsProcessing] = useState(false);
 
     const messagesEndRef = useRef<HTMLDivElement>(null);
     const { textareaRef, adjustHeight } = useAutoResizeTextarea({
@@ -203,22 +206,83 @@ export function ProfessionalChatWithGemini({ user }: ProfessionalChatProps) {
         }
     };
 
-    // Cập nhật tiêu đề cuộc trò chuyện
-    const updateChatTitle = async (chatId: string, title: string) => {
+    // Mở modal đổi tên
+    const openRenameModal = (chatId: string, currentTitle: string) => {
+        setSelectedChatId(chatId);
+        setSelectedChatTitle(currentTitle);
+        setNewChatTitle(currentTitle);
+        setIsRenameModalOpen(true);
+    };
+
+    // Đóng modal đổi tên
+    const closeRenameModal = () => {
+        setIsRenameModalOpen(false);
+        setSelectedChatId(null);
+        setSelectedChatTitle("");
+        setNewChatTitle("");
+    };
+
+    // Xử lý đổi tên
+    const handleRename = async (e: React.FormEvent) => {
+        e.preventDefault();
+
+        if (!selectedChatId || !newChatTitle.trim()) return;
+
+        setIsProcessing(true);
+
         try {
-            const response = await chatAPI.updateChatTitle(chatId, title);
+            const response = await chatAPI.updateChatTitle(selectedChatId, newChatTitle);
 
             // Cập nhật tiêu đề trong danh sách
             setChats(prevChats =>
                 prevChats.map(chat =>
-                    chat.id === chatId ? response.chat : chat
+                    chat.id === selectedChatId ? response.chat : chat
                 )
             );
+
+            closeRenameModal();
         } catch (error) {
             console.error("Error updating chat title:", error);
             setError("Failed to update chat title. Please try again.");
+        } finally {
+            setIsProcessing(false);
         }
     };
+
+    // Mở modal xóa
+    const openDeleteModal = (chatId: string, title: string) => {
+        setSelectedChatId(chatId);
+        setSelectedChatTitle(title);
+        setIsDeleteModalOpen(true);
+    };
+
+    // Đóng modal xóa
+    const closeDeleteModal = () => {
+        setIsDeleteModalOpen(false);
+        setSelectedChatId(null);
+        setSelectedChatTitle("");
+    };
+
+    // Xử lý xóa chat
+    const handleDelete = async (e: React.FormEvent) => {
+        e.preventDefault();
+
+        if (!selectedChatId) return;
+
+        setIsProcessing(true);
+
+        try {
+            await deleteChat(selectedChatId);
+            closeDeleteModal();
+        } catch (error) {
+            console.error("Error deleting chat:", error);
+            setError("Failed to delete chat. Please try again.");
+        } finally {
+            setIsProcessing(false);
+        }
+    };
+
+    // Hàm updateChatTitle đã được thay thế bằng handleRename
 
     // Scroll to bottom when messages change
     useEffect(() => {
@@ -229,8 +293,35 @@ export function ProfessionalChatWithGemini({ user }: ProfessionalChatProps) {
     const handleSendMessage = async () => {
         if (!value.trim()) return;
 
-        // Thêm log để debug
-        console.log("Sending message with auth token:", localStorage.getItem('auth_token')?.substring(0, 10) + "...");
+        // Lưu nội dung tin nhắn và xóa input
+        const messageContent = value.trim();
+        setValue("");
+        adjustHeight(true);
+
+        // Set hasSentMessage to true when first message is sent
+        if (!hasSentMessage) {
+            setHasSentMessage(true);
+        }
+
+        // Tạo ID tạm thời cho tin nhắn người dùng
+        const tempUserId = `temp-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
+
+        // Tạo tin nhắn tạm thời của người dùng để hiển thị ngay lập tức
+        const tempUserMessage: Message = {
+            id: tempUserId,
+            chat_id: currentChatId || 'temp-chat',
+            role: 'user',
+            content: messageContent,
+            created_at: new Date().toISOString()
+        };
+
+        // Thêm tin nhắn người dùng vào state ngay lập tức
+        setMessages(prevMessages => [...prevMessages, tempUserMessage]);
+
+        // Scroll xuống dưới để hiển thị tin nhắn mới
+        setTimeout(() => {
+            messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+        }, 100);
 
         // Nếu chưa có cuộc trò chuyện nào, tạo cuộc trò chuyện mới
         if (!currentChatId) {
@@ -242,29 +333,30 @@ export function ProfessionalChatWithGemini({ user }: ProfessionalChatProps) {
                 setChats(prevChats => [response.chat, ...prevChats]);
 
                 // Gửi tin nhắn trong cuộc trò chuyện mới
-                await sendMessageToChat(response.chat.id, value);
+                await sendMessageToChat(response.chat.id, messageContent, tempUserId);
             } catch (error) {
                 console.error("Error creating new chat:", error);
                 setError("Failed to create new chat. Please try again.");
+
+                // Đánh dấu tin nhắn tạm thời là lỗi
+                setMessages(prevMessages =>
+                    prevMessages.map(msg =>
+                        msg.id === tempUserId
+                            ? { ...msg, content: msg.content + " (Failed to send)" }
+                            : msg
+                    )
+                );
                 return;
             }
         } else {
             // Gửi tin nhắn trong cuộc trò chuyện hiện tại
             console.log("Sending message to existing chat:", currentChatId);
-            await sendMessageToChat(currentChatId, value);
-        }
-
-        setValue("");
-        adjustHeight(true);
-
-        // Set hasSentMessage to true when first message is sent
-        if (!hasSentMessage) {
-            setHasSentMessage(true);
+            await sendMessageToChat(currentChatId, messageContent, tempUserId);
         }
     };
 
     // Hàm gửi tin nhắn đến chat-service
-    const sendMessageToChat = async (chatId: string, content: string) => {
+    const sendMessageToChat = async (chatId: string, content: string, tempMessageId?: string, retryCount = 0) => {
         try {
             console.log("Starting to send message to chat ID:", chatId);
             setIsTyping(true);
@@ -272,14 +364,73 @@ export function ProfessionalChatWithGemini({ user }: ProfessionalChatProps) {
             // Gọi API để gửi tin nhắn và nhận phản hồi
             console.log("Calling chatAPI.sendMessage...");
             const response = await chatAPI.sendMessage(chatId, content);
-            console.log("Message sent successfully, received response:", response.userMessage.id);
+            console.log("Message sent successfully, received response:", response);
+
+            // Kiểm tra cấu trúc phản hồi
+            console.log("Response structure:", JSON.stringify(response));
+
+            if (!response || typeof response !== 'object') {
+                console.error("Invalid response format:", response);
+
+                // Thử lại nếu chưa vượt quá số lần thử lại tối đa
+                if (retryCount < 2) {
+                    console.log(`Retrying (${retryCount + 1}/2)...`);
+                    return await sendMessageToChat(chatId, content, tempMessageId, retryCount + 1);
+                }
+
+                throw new Error("Invalid response format: not an object");
+            }
+
+            if (!response.assistantMessage) {
+                console.error("Missing assistantMessage in response:", response);
+
+                // Thử lại nếu chưa vượt quá số lần thử lại tối đa
+                if (retryCount < 2) {
+                    console.log(`Retrying (${retryCount + 1}/2)...`);
+                    return await sendMessageToChat(chatId, content, tempMessageId, retryCount + 1);
+                }
+
+                throw new Error("Invalid response format: missing assistantMessage");
+            }
+
+            if (!response.userMessage) {
+                console.error("Missing userMessage in response:", response);
+
+                // Thử lại nếu chưa vượt quá số lần thử lại tối đa
+                if (retryCount < 2) {
+                    console.log(`Retrying (${retryCount + 1}/2)...`);
+                    return await sendMessageToChat(chatId, content, tempMessageId, retryCount + 1);
+                }
+
+                throw new Error("Invalid response format: missing userMessage");
+            }
 
             // Cập nhật danh sách tin nhắn
-            setMessages(prevMessages => [
-                ...prevMessages,
-                response.userMessage,
-                response.assistantMessage
-            ]);
+            setMessages(prevMessages => {
+                try {
+                    // Kiểm tra lại một lần nữa để đảm bảo response có cấu trúc đúng
+                    if (!response.assistantMessage || !response.assistantMessage.id || !response.assistantMessage.content) {
+                        console.error("Invalid assistantMessage structure:", response.assistantMessage);
+                        throw new Error("Invalid assistantMessage structure");
+                    }
+
+                    // Nếu có tempMessageId, giữ nguyên tin nhắn người dùng đã hiển thị và chỉ thêm tin nhắn AI
+                    if (tempMessageId) {
+                        console.log("Adding AI message to existing user message. AI message ID:", response.assistantMessage.id);
+                        // Chỉ thêm tin nhắn AI vào danh sách, giữ nguyên tin nhắn người dùng đã hiển thị
+                        return [...prevMessages, response.assistantMessage];
+                    } else {
+                        console.log("Adding both user and AI messages. User ID:", response.userMessage.id, "AI ID:", response.assistantMessage.id);
+                        // Nếu không có tempMessageId, thêm cả tin nhắn người dùng và phản hồi
+                        return [...prevMessages, response.userMessage, response.assistantMessage];
+                    }
+                } catch (error) {
+                    console.error("Error updating messages:", error);
+                    // Trong trường hợp lỗi, giữ nguyên danh sách tin nhắn hiện tại
+                    setError("Error displaying AI response. Please try again.");
+                    return prevMessages;
+                }
+            });
 
             // Cập nhật thời gian cập nhật của cuộc trò chuyện
             setChats(prevChats =>
@@ -292,10 +443,46 @@ export function ProfessionalChatWithGemini({ user }: ProfessionalChatProps) {
             console.log("Chat and messages state updated");
         } catch (error) {
             console.error("Error sending message:", error);
+
+            // Nếu có tempMessageId, đánh dấu tin nhắn tạm thời là lỗi
+            if (tempMessageId) {
+                setMessages(prevMessages => {
+                    try {
+                        // Tìm tin nhắn tạm thời
+                        const tempMessage = prevMessages.find(msg => msg.id === tempMessageId);
+
+                        if (!tempMessage) {
+                            console.error("Could not find temporary message with ID:", tempMessageId);
+                            return prevMessages;
+                        }
+
+                        // Thêm thông báo lỗi vào tin nhắn
+                        return prevMessages.map(msg =>
+                            msg.id === tempMessageId
+                                ? { ...msg, content: msg.content + " (Failed to send)" }
+                                : msg
+                        );
+                    } catch (updateError) {
+                        console.error("Error updating message with error status:", updateError);
+                        return prevMessages;
+                    }
+                });
+            }
+
             // Hiển thị thông tin chi tiết hơn về lỗi
             if (error instanceof Error) {
                 console.error("Error details:", error.message);
-                setError(`Failed to send message: ${error.message}`);
+
+                // Hiển thị thông báo lỗi thân thiện với người dùng
+                if (error.message.includes("Invalid response format") ||
+                    error.message.includes("assistantMessage") ||
+                    error.message.includes("userMessage")) {
+                    setError("Could not get response from AI. Please try again.");
+                } else if (error.message.includes("network") || error.message.includes("timeout")) {
+                    setError("Network error. Please check your connection and try again.");
+                } else {
+                    setError(`Failed to send message: ${error.message}`);
+                }
             } else {
                 setError("Failed to send message. Please try again.");
             }
@@ -354,7 +541,15 @@ export function ProfessionalChatWithGemini({ user }: ProfessionalChatProps) {
                     </motion.button>
                 </div>
                 <div className="flex-1 overflow-y-auto px-2 py-2 scrollbar-thin scrollbar-thumb-transparent scrollbar-track-transparent">
-                    {chats.length === 0 ? (
+                    {isLoadingChats ? (
+                        <div className="flex justify-center items-center h-full">
+                            <div className="flex space-x-2">
+                                <div className="w-2 h-2 rounded-full bg-white/80 animate-bounce-delay-0"></div>
+                                <div className="w-2 h-2 rounded-full bg-white/80 animate-bounce-delay-1"></div>
+                                <div className="w-2 h-2 rounded-full bg-white/80 animate-bounce-delay-2"></div>
+                            </div>
+                        </div>
+                    ) : chats.length === 0 ? (
                         <div className="text-center py-6 text-white/50 text-sm">
                             No thing
                         </div>
@@ -378,10 +573,7 @@ export function ProfessionalChatWithGemini({ user }: ProfessionalChatProps) {
                                     <motion.button
                                         onClick={(e) => {
                                             e.stopPropagation();
-                                            const newTitle = prompt("Nhập tiêu đề mới:", chat.title);
-                                            if (newTitle) {
-                                                updateChatTitle(chat.id, newTitle);
-                                            }
+                                            openRenameModal(chat.id, chat.title);
                                         }}
                                         className="p-1.5 rounded-md text-white/50 hover:text-white hover:bg-white/10 transition-colors"
                                         whileHover={{ scale: 1.1 }}
@@ -392,9 +584,7 @@ export function ProfessionalChatWithGemini({ user }: ProfessionalChatProps) {
                                     <motion.button
                                         onClick={(e) => {
                                             e.stopPropagation();
-                                            if (confirm("Bạn có chắc chắn muốn xóa cuộc trò chuyện này?")) {
-                                                deleteChat(chat.id);
-                                            }
+                                            openDeleteModal(chat.id, chat.title);
                                         }}
                                         className="p-1.5 rounded-md text-white/50 hover:text-red-400 hover:bg-white/10 transition-colors"
                                         whileHover={{ scale: 1.1 }}
@@ -794,6 +984,101 @@ export function ProfessionalChatWithGemini({ user }: ProfessionalChatProps) {
                             </div>
                         </div>
                     </div>
+                </div>
+            )}
+
+            {/* Rename Modal */}
+            {isRenameModalOpen && (
+                <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50">
+                    <motion.div
+                        className="bg-zinc-900 border border-zinc-800 rounded-xl shadow-xl w-full max-w-md p-6"
+                        initial={{ scale: 0.9, opacity: 0 }}
+                        animate={{ scale: 1, opacity: 1 }}
+                        transition={{ duration: 0.3 }}
+                    >
+                        <h2 className="text-xl font-semibold text-white mb-4">Rename Chat</h2>
+                        <form onSubmit={handleRename}>
+                            <div className="mb-4">
+                                <label htmlFor="chatTitle" className="block text-sm font-medium text-white/70 mb-1">
+                                    Chat Title
+                                </label>
+                                <input
+                                    type="text"
+                                    id="chatTitle"
+                                    value={newChatTitle}
+                                    onChange={(e) => setNewChatTitle(e.target.value)}
+                                    className="w-full px-4 py-2 bg-zinc-800/50 border border-zinc-700 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                    placeholder="Enter new title"
+                                    required
+                                />
+                            </div>
+                            <div className="flex justify-end gap-3 mt-6">
+                                <button
+                                    type="button"
+                                    onClick={closeRenameModal}
+                                    className="px-4 py-2 bg-zinc-800 hover:bg-zinc-700 text-white rounded-lg transition-colors"
+                                >
+                                    Cancel
+                                </button>
+                                <button
+                                    type="submit"
+                                    disabled={isProcessing}
+                                    className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition-colors flex items-center gap-2"
+                                >
+                                    {isProcessing ? (
+                                        <>
+                                            <div className="w-4 h-4 border-2 border-white/20 border-t-white/80 rounded-full animate-spin"></div>
+                                            Processing...
+                                        </>
+                                    ) : (
+                                        'Save Changes'
+                                    )}
+                                </button>
+                            </div>
+                        </form>
+                    </motion.div>
+                </div>
+            )}
+
+            {/* Delete Modal */}
+            {isDeleteModalOpen && (
+                <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50">
+                    <motion.div
+                        className="bg-zinc-900 border border-zinc-800 rounded-xl shadow-xl w-full max-w-md p-6"
+                        initial={{ scale: 0.9, opacity: 0 }}
+                        animate={{ scale: 1, opacity: 1 }}
+                        transition={{ duration: 0.3 }}
+                    >
+                        <h2 className="text-xl font-semibold text-white mb-4">Confirm Deletion</h2>
+                        <p className="text-white/70 mb-4">
+                            Are you sure you want to delete the chat "{selectedChatTitle}"? This action cannot be undone.
+                        </p>
+                        <form onSubmit={handleDelete}>
+                            <div className="flex justify-end gap-3 mt-6">
+                                <button
+                                    type="button"
+                                    onClick={closeDeleteModal}
+                                    className="px-4 py-2 bg-zinc-800 hover:bg-zinc-700 text-white rounded-lg transition-colors"
+                                >
+                                    Cancel
+                                </button>
+                                <button
+                                    type="submit"
+                                    disabled={isProcessing}
+                                    className="px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg transition-colors flex items-center gap-2"
+                                >
+                                    {isProcessing ? (
+                                        <>
+                                            <div className="w-4 h-4 border-2 border-white/20 border-t-white/80 rounded-full animate-spin"></div>
+                                            Processing...
+                                        </>
+                                    ) : (
+                                        'Delete Chat'
+                                    )}
+                                </button>
+                            </div>
+                        </form>
+                    </motion.div>
                 </div>
             )}
         </div>

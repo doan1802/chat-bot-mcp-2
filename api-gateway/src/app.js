@@ -17,10 +17,12 @@ const numCPUs = os.cpus().length;
 const app = express();
 
 // Middleware
-// Log all requests in development environment
+// Log requests chỉ trong môi trường phát triển và bỏ qua health checks
 app.use((req, res, next) => {
-  // Skip logging for OPTIONS requests
-  if (req.method !== 'OPTIONS') {
+  // Skip logging for OPTIONS requests và health checks
+  if (process.env.NODE_ENV === 'development' &&
+      req.method !== 'OPTIONS' &&
+      !req.url.includes('/health')) {
     console.log(`[${new Date().toISOString()}] ${req.method} ${req.url}`);
   }
   next();
@@ -29,7 +31,7 @@ app.use((req, res, next) => {
 app.use(cors({
   origin: ['http://localhost:3000', 'http://localhost:3001', 'http://localhost:3002'],
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'X-Client-Instance'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Client-Instance', 'X-Request-ID'],
   credentials: true
 }));
 app.use(express.json());
@@ -39,10 +41,7 @@ app.use(proxyRoutes);
 
 // Health check endpoint
 app.get('/health', (_req, res) => {
-  // Only log health checks in development
-  if (process.env.NODE_ENV === 'development') {
-    console.log(`[${new Date().toISOString()}] Health check requested`);
-  }
+  // Loại bỏ log health check
   res.status(200).json({ status: 'ok', service: 'api-gateway' });
 });
 
@@ -276,12 +275,16 @@ app.get('/api/direct-profile', async (req, res) => {
       // Always log forwarded requests
       console.log(`[${new Date().toISOString()}] Forwarding profile request to User Service for: ${profileMaskedEmail}`);
 
+      // Thêm header X-Request-ID để theo dõi request
+      const requestId = `req-${Date.now()}-${Math.random().toString(36).substring(2, 10)}`;
+
       const response = await fetch(`${userServiceUrl}/api/users/profile`, {
         method: 'GET',
         headers: {
-          'Authorization': authHeader
+          'Authorization': authHeader,
+          'X-Request-ID': requestId
         },
-        timeout: 8000 // Tăng timeout lên 8 giây
+        timeout: 15000 // Tăng timeout lên 15 giây để đảm bảo có đủ thời gian xử lý
       });
 
       const duration = Date.now() - startTime;
@@ -291,11 +294,64 @@ app.get('/api/direct-profile', async (req, res) => {
         // Always log profile request failures
         console.error(`[${new Date().toISOString()}] Profile request failed for user: ${profileMaskedEmail} (${duration}ms)`);
 
-        // Nếu lỗi là "User profile not found", trả về profile tạm thời
+        // Nếu lỗi là "User profile not found", thử tìm profile trong Supabase trực tiếp
         if (response.status === 404 && errorData.error === 'User profile not found') {
+          console.log(`[${new Date().toISOString()}] Profile not found for user: ${profileMaskedEmail}, ID: ${verified.id}`);
+          console.log(`[${new Date().toISOString()}] Request ID: ${requestId}, Response status: ${response.status}`);
+
+          // Log thêm thông tin để debug
+          console.log(`[${new Date().toISOString()}] User ID type: ${typeof verified.id}`);
+          console.log(`[${new Date().toISOString()}] User ID value: ${verified.id}`);
+
+          // Thử gọi API admin để lấy profile trực tiếp từ Supabase
+          try {
+            console.log(`[${new Date().toISOString()}] Trying to get profile directly from Supabase using admin API`);
+
+            const adminResponse = await fetch(`${userServiceUrl}/api/admin/profiles/${verified.id}`, {
+              method: 'GET',
+              headers: {
+                'Authorization': `Bearer ${process.env.ADMIN_SECRET_KEY}`,
+                'X-Request-ID': `${requestId}-admin`,
+                'X-User-Email': verified.email
+              },
+              timeout: 15000
+            });
+
+            if (adminResponse.ok) {
+              const adminData = await adminResponse.json();
+              console.log(`[${new Date().toISOString()}] Admin API successful, returning profile`);
+
+              // Thử cập nhật cache trong user-service
+              try {
+                await fetch(`${userServiceUrl}/api/admin/cache/update`, {
+                  method: 'POST',
+                  headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${process.env.ADMIN_SECRET_KEY}`
+                  },
+                  body: JSON.stringify({
+                    type: 'profile',
+                    userId: verified.id,
+                    data: adminData.profile
+                  }),
+                  timeout: 5000
+                });
+                console.log(`[${new Date().toISOString()}] Cache update request sent`);
+              } catch (cacheError) {
+                console.error(`[${new Date().toISOString()}] Error updating cache:`, cacheError.message);
+              }
+
+              return res.status(200).json(adminData);
+            } else {
+              console.log(`[${new Date().toISOString()}] Admin API failed, returning temporary profile`);
+            }
+          } catch (adminError) {
+            console.error(`[${new Date().toISOString()}] Error in admin API:`, adminError.message);
+          }
+
+          // Trả về profile tạm thời
           console.log(`[${new Date().toISOString()}] Returning temporary profile for user: ${profileMaskedEmail}`);
 
-          // Tạo profile tạm thời
           const temporaryProfile = {
             id: verified.id,
             email: verified.email,

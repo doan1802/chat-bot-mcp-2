@@ -12,16 +12,38 @@ const userServiceProxy = createProxyMiddleware({
   pathRewrite: {
     '^/api/user-service': '/api', // rewrite path
   },
-  onProxyReq: (proxyReq, req, res) => {
-    // Log the request
-    const startTime = Date.now();
-    req.startTime = startTime;
-    console.log(`[${new Date().toISOString()}] Proxying request to user service: ${req.method} ${req.originalUrl}`);
+  // Tăng timeout để xử lý các request lâu hơn
+  proxyTimeout: 30000, // 30 giây
+  // Tối ưu hóa buffer để tăng hiệu suất
+  buffer: {
+    enabled: true,
+    maxBodySize: 10 * 1024 * 1024, // 10MB
   },
-  onProxyRes: (proxyRes, req, res) => {
-    // Log the response
+  onProxyReq: (_proxyReq, req, _res) => {
+    // Luôn ghi lại thời gian bắt đầu để tính thời gian xử lý
+    req.startTime = Date.now();
+
+    // Chỉ log trong môi trường phát triển và không phải OPTIONS hoặc health check
+    if (process.env.NODE_ENV === 'development' &&
+        req.method !== 'OPTIONS' &&
+        !req.originalUrl.includes('/health')) {
+      console.log(`[${new Date().toISOString()}] Proxying request to user service: ${req.method} ${req.originalUrl}`);
+    }
+  },
+  onProxyRes: (proxyRes, req, _res) => {
+    // Tính thời gian xử lý
     const duration = Date.now() - (req.startTime || Date.now());
-    console.log(`[${new Date().toISOString()}] Response from user service: ${proxyRes.statusCode} (${duration}ms) for ${req.method} ${req.originalUrl}`);
+
+    // Chỉ log các response chậm (> 1000ms) hoặc lỗi
+    if (duration > 1000 || proxyRes.statusCode >= 400) {
+      console.log(`[${new Date().toISOString()}] Response from user service: ${proxyRes.statusCode} (${duration}ms) for ${req.method} ${req.originalUrl}`);
+    }
+    // Trong môi trường phát triển, log thêm các request không phải OPTIONS và health check
+    else if (process.env.NODE_ENV === 'development' &&
+             req.method !== 'OPTIONS' &&
+             !req.originalUrl.includes('/health')) {
+      console.log(`[${new Date().toISOString()}] Response from user service: ${proxyRes.statusCode} (${duration}ms) for ${req.method} ${req.originalUrl}`);
+    }
   },
   onError: (err, req, res) => {
     console.error(`[${new Date().toISOString()}] Proxy error: ${err.message} for ${req.method} ${req.originalUrl}`);
@@ -36,16 +58,38 @@ const chatServiceProxy = createProxyMiddleware({
   pathRewrite: {
     '^/api/chat-service': '/api', // rewrite path
   },
-  onProxyReq: (proxyReq, req, res) => {
-    // Log the request
-    const startTime = Date.now();
-    req.startTime = startTime;
-    console.log(`[${new Date().toISOString()}] Proxying request to chat service: ${req.method} ${req.originalUrl}`);
+  // Tăng timeout để xử lý các request lâu hơn, đặc biệt là gọi Gemini API
+  proxyTimeout: 60000, // 60 giây
+  // Tối ưu hóa buffer để tăng hiệu suất
+  buffer: {
+    enabled: true,
+    maxBodySize: 10 * 1024 * 1024, // 10MB
   },
-  onProxyRes: (proxyRes, req, res) => {
-    // Log the response
+  onProxyReq: (_proxyReq, req, _res) => {
+    // Luôn ghi lại thời gian bắt đầu để tính thời gian xử lý
+    req.startTime = Date.now();
+
+    // Chỉ log trong môi trường phát triển và không phải OPTIONS hoặc health check
+    if (process.env.NODE_ENV === 'development' &&
+        req.method !== 'OPTIONS' &&
+        !req.originalUrl.includes('/health')) {
+      console.log(`[${new Date().toISOString()}] Proxying request to chat service: ${req.method} ${req.originalUrl}`);
+    }
+  },
+  onProxyRes: (proxyRes, req, _res) => {
+    // Tính thời gian xử lý
     const duration = Date.now() - (req.startTime || Date.now());
-    console.log(`[${new Date().toISOString()}] Response from chat service: ${proxyRes.statusCode} (${duration}ms) for ${req.method} ${req.originalUrl}`);
+
+    // Chỉ log các response chậm (> 1000ms) hoặc lỗi
+    if (duration > 1000 || proxyRes.statusCode >= 400) {
+      console.log(`[${new Date().toISOString()}] Response from chat service: ${proxyRes.statusCode} (${duration}ms) for ${req.method} ${req.originalUrl}`);
+    }
+    // Trong môi trường phát triển, log thêm các request không phải OPTIONS và health check
+    else if (process.env.NODE_ENV === 'development' &&
+             req.method !== 'OPTIONS' &&
+             !req.originalUrl.includes('/health')) {
+      console.log(`[${new Date().toISOString()}] Response from chat service: ${proxyRes.statusCode} (${duration}ms) for ${req.method} ${req.originalUrl}`);
+    }
   },
   onError: (err, req, res) => {
     console.error(`[${new Date().toISOString()}] Proxy error: ${err.message} for ${req.method} ${req.originalUrl}`);

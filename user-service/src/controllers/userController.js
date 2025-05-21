@@ -105,11 +105,15 @@ const getUserProfile = async (req, res) => {
 
     console.log(`[Worker ${workerId}] Cache miss for user profile: ${userId}, fetching from database`);
 
+    // Đảm bảo userId là chuỗi
+    const userIdStr = String(userId);
+    console.log(`[Worker ${workerId}] Querying profile with ID (as string): ${userIdStr}`);
+
     // Lấy thông tin profile từ bảng profiles
     const { data, error } = await supabase
       .from('profiles')
       .select('*')
-      .eq('id', userId)
+      .eq('id', userIdStr)
       .limit(1);
 
     if (error) {
@@ -119,7 +123,16 @@ const getUserProfile = async (req, res) => {
 
     if (!data || data.length === 0) {
       console.log(`[Worker ${workerId}] No profile found for user: ${userId}`);
-      return res.status(404).json({ error: 'User profile not found' });
+
+      // Kiểm tra xem profile có tồn tại trong cache của worker khác không
+      const allKeys = userCache.keys();
+      console.log(`[Worker ${workerId}] Checking cache keys: ${allKeys.join(', ')}`);
+
+      // Trả về lỗi 404 để API Gateway có thể xử lý
+      return res.status(404).json({
+        error: 'User profile not found',
+        message: 'Profile not found in database. Please contact administrator.'
+      });
     }
 
     const profile = data[0];

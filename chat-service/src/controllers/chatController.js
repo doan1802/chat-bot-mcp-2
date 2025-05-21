@@ -27,11 +27,23 @@ const getUserChats = async (req, res) => {
     const userId = req.user.id;
     const clientInstance = req.headers['x-client-instance'] || 'unknown-client';
 
-    console.log(`[Client: ${clientInstance}] Getting chats for user: ${userId}`);
+    // Chỉ log trong môi trường phát triển
+    if (process.env.NODE_ENV === 'development') {
+      console.log(`[Client: ${clientInstance}] Getting chats for user: ${userId}`);
+    }
 
     // Đảm bảo userId là chuỗi
     const userIdStr = String(userId);
-    console.log(`[Client: ${clientInstance}] User ID as string: ${userIdStr}`);
+
+    // Kiểm tra cache trước
+    const cacheKey = `chats_${userIdStr}`;
+    if (req.app.locals.chatCache && req.app.locals.chatCache.has(cacheKey)) {
+      // Chỉ log cache hit trong môi trường phát triển
+      if (process.env.NODE_ENV === 'development') {
+        console.log(`[Client: ${clientInstance}] Cache hit for user chats: ${userIdStr}`);
+      }
+      return res.status(200).json({ chats: req.app.locals.chatCache.get(cacheKey) });
+    }
 
     // Lấy danh sách cuộc trò chuyện từ Supabase
     const { data, error } = await supabase
@@ -41,20 +53,34 @@ const getUserChats = async (req, res) => {
       .order('updated_at', { ascending: false });
 
     if (error) {
+      // Luôn log lỗi database
       console.error(`[Client: ${clientInstance}] Error getting chats for user ${userIdStr}:`, error);
       return res.status(400).json({ error: error.message });
     }
 
     // Kiểm tra xem data có phải là null hoặc undefined không
     if (!data) {
-      console.log(`[Client: ${clientInstance}] No data returned for user: ${userIdStr}`);
+      // Chỉ log trong môi trường phát triển
+      if (process.env.NODE_ENV === 'development') {
+        console.log(`[Client: ${clientInstance}] No data returned for user: ${userIdStr}`);
+      }
       return res.status(200).json({ chats: [] });
     }
 
-    console.log(`[Client: ${clientInstance}] Found ${data.length} chats for user: ${userIdStr}`);
+    // Lưu vào cache nếu có
+    if (req.app.locals.chatCache) {
+      req.app.locals.chatCache.set(cacheKey, data);
+    }
+
+    // Chỉ log kết quả trong môi trường phát triển
+    if (process.env.NODE_ENV === 'development') {
+      console.log(`[Client: ${clientInstance}] Found ${data.length} chats for user: ${userIdStr}`);
+    }
+
     return res.status(200).json({ chats: data });
   } catch (error) {
     const clientInstance = req.headers['x-client-instance'] || 'unknown-client';
+    // Luôn log lỗi
     console.error(`[Client: ${clientInstance}] Get user chats error for user ${req.user.id}:`, error);
     return res.status(500).json({ error: 'Internal server error' });
   }
@@ -68,28 +94,45 @@ const createChat = async (req, res) => {
 
     // Lấy thông tin client instance từ header nếu có
     const clientInstance = req.headers['x-client-instance'] || 'unknown-client';
-    console.log(`[Client: ${clientInstance}] Creating new chat for user: ${userId} with title: ${title || 'New Chat'}`);
+
+    // Chỉ log trong môi trường phát triển
+    if (process.env.NODE_ENV === 'development') {
+      console.log(`[Client: ${clientInstance}] Creating new chat for user: ${userId} with title: ${title || 'New Chat'}`);
+    }
 
     // Tạo cuộc trò chuyện mới trong Supabase
     const { data, error } = await insertChat(userId, title);
 
     if (error) {
+      // Luôn log lỗi database
       console.error(`[Client: ${clientInstance}] Error creating chat for user ${userId}:`, error);
       return res.status(400).json({ error: error.message });
     }
 
     if (!data) {
+      // Luôn log lỗi dữ liệu
       console.error(`[Client: ${clientInstance}] No data returned when creating chat for user ${userId}`);
       return res.status(500).json({ error: 'Failed to create chat: No data returned' });
     }
 
-    console.log(`[Client: ${clientInstance}] Chat created successfully with ID: ${data.id} for user: ${userId}`);
+    // Xóa cache nếu có
+    if (req.app.locals.chatCache) {
+      const cacheKey = `chats_${userId}`;
+      req.app.locals.chatCache.del(cacheKey);
+    }
+
+    // Chỉ log thành công trong môi trường phát triển
+    if (process.env.NODE_ENV === 'development') {
+      console.log(`[Client: ${clientInstance}] Chat created successfully with ID: ${data.id} for user: ${userId}`);
+    }
+
     return res.status(201).json({
       message: 'Chat created successfully',
       chat: data
     });
   } catch (error) {
     const clientInstance = req.headers['x-client-instance'] || 'unknown-client';
+    // Luôn log lỗi
     console.error(`[Client: ${clientInstance}] Create chat error for user ${req.user.id}:`, error);
     return res.status(500).json({ error: 'Internal server error' });
   }
@@ -100,6 +143,17 @@ const getChatById = async (req, res) => {
   try {
     const userId = req.user.id;
     const chatId = req.params.chatId;
+    const clientInstance = req.headers['x-client-instance'] || 'unknown-client';
+
+    // Kiểm tra cache trước
+    const cacheKey = `chat_${chatId}_${userId}`;
+    if (req.app.locals.messageCache && req.app.locals.messageCache.has(cacheKey)) {
+      // Chỉ log cache hit trong môi trường phát triển
+      if (process.env.NODE_ENV === 'development') {
+        console.log(`[Client: ${clientInstance}] Cache hit for chat: ${chatId}`);
+      }
+      return res.status(200).json(req.app.locals.messageCache.get(cacheKey));
+    }
 
     // Kiểm tra xem cuộc trò chuyện có tồn tại và thuộc về người dùng không
     const { data: chats, error: chatError } = await supabase
@@ -110,10 +164,16 @@ const getChatById = async (req, res) => {
       .limit(1);
 
     if (chatError) {
+      // Luôn log lỗi database
+      console.error(`[Client: ${clientInstance}] Error getting chat ${chatId} for user ${userId}:`, chatError);
       return res.status(404).json({ error: 'Chat not found' });
     }
 
     if (!chats || chats.length === 0) {
+      // Chỉ log trong môi trường phát triển
+      if (process.env.NODE_ENV === 'development') {
+        console.log(`[Client: ${clientInstance}] Chat ${chatId} not found for user ${userId}`);
+      }
       return res.status(404).json({ error: 'Chat not found' });
     }
 
@@ -127,15 +187,26 @@ const getChatById = async (req, res) => {
       .order('created_at', { ascending: true });
 
     if (messagesError) {
+      // Luôn log lỗi database
+      console.error(`[Client: ${clientInstance}] Error getting messages for chat ${chatId}:`, messagesError);
       return res.status(400).json({ error: messagesError.message });
     }
 
-    return res.status(200).json({
+    const result = {
       chat,
       messages
-    });
+    };
+
+    // Lưu vào cache nếu có
+    if (req.app.locals.messageCache) {
+      req.app.locals.messageCache.set(cacheKey, result);
+    }
+
+    return res.status(200).json(result);
   } catch (error) {
-    console.error('Get chat by ID error:', error);
+    const clientInstance = req.headers['x-client-instance'] || 'unknown-client';
+    // Luôn log lỗi
+    console.error(`[Client: ${clientInstance}] Get chat by ID error:`, error);
     return res.status(500).json({ error: 'Internal server error' });
   }
 };
@@ -148,7 +219,15 @@ const sendMessage = async (req, res) => {
 
   // Lấy thông tin client instance từ header
   const clientInstance = req.headers['x-client-instance'] || 'unknown-client';
-  console.log(`Processing message from client instance: ${clientInstance} for user: ${userId} in chat: ${chatId}`);
+
+  // Giảm số lượng log không cần thiết
+  if (process.env.NODE_ENV === 'development') {
+    console.log(`Processing message from client instance: ${clientInstance} for user: ${userId} in chat: ${chatId}`);
+  }
+
+  // Tối ưu hóa cơ chế khóa phiên chat
+  // Sử dụng cơ chế timeout để tự động giải phóng khóa nếu xử lý quá lâu
+  const processingTimeout = 30000; // 30 giây
 
   // Kiểm tra xem chat này đã đang được xử lý bởi client khác không
   if (activeChats.has(chatId)) {
@@ -156,24 +235,53 @@ const sendMessage = async (req, res) => {
 
     // Nếu chat đang được xử lý bởi client khác
     if (chatSession.isProcessing && chatSession.clientInstance !== clientInstance) {
-      console.log(`[Client: ${clientInstance}] Chat ${chatId} is already being processed by client ${chatSession.clientInstance}`);
-      return res.status(409).json({
-        error: 'This chat is currently being processed by another session. Please try again later.'
-      });
+      // Kiểm tra xem phiên có bị treo không (quá 30 giây)
+      const now = Date.now();
+      if (now - chatSession.lastActivity > processingTimeout) {
+        console.log(`[Client: ${clientInstance}] Releasing stale lock on chat ${chatId} from client: ${chatSession.clientInstance}`);
+        // Giải phóng khóa cũ
+        chatSession.isProcessing = false;
+      } else {
+        console.log(`[Client: ${clientInstance}] Chat ${chatId} is already being processed by client ${chatSession.clientInstance}`);
+        return res.status(409).json({
+          error: 'This chat is currently being processed by another session. Please try again later.'
+        });
+      }
     }
 
     // Cập nhật thông tin phiên chat
     chatSession.lastActivity = Date.now();
     chatSession.clientInstance = clientInstance;
     chatSession.isProcessing = true;
+
+    // Thiết lập timer để tự động giải phóng khóa nếu xử lý quá lâu
+    if (chatSession.timer) {
+      clearTimeout(chatSession.timer);
+    }
+    chatSession.timer = setTimeout(() => {
+      if (activeChats.has(chatId)) {
+        console.log(`[Client: ${clientInstance}] Auto-releasing lock on chat ${chatId} after timeout`);
+        activeChats.get(chatId).isProcessing = false;
+      }
+    }, processingTimeout);
   } else {
     // Tạo phiên chat mới
-    activeChats.set(chatId, {
+    const newSession = {
       userId,
       clientInstance,
       lastActivity: Date.now(),
       isProcessing: true
-    });
+    };
+
+    // Thiết lập timer để tự động giải phóng khóa nếu xử lý quá lâu
+    newSession.timer = setTimeout(() => {
+      if (activeChats.has(chatId)) {
+        console.log(`[Client: ${clientInstance}] Auto-releasing lock on chat ${chatId} after timeout`);
+        activeChats.get(chatId).isProcessing = false;
+      }
+    }, processingTimeout);
+
+    activeChats.set(chatId, newSession);
   }
 
   try {
@@ -214,13 +322,17 @@ const sendMessage = async (req, res) => {
 
     const chat = chats[0];
 
-    console.log(`[Client: ${clientInstance}] Saving user message for chat: ${chatId}`);
+    // Chỉ log trong môi trường phát triển
+    if (process.env.NODE_ENV === 'development') {
+      console.log(`[Client: ${clientInstance}] Saving user message for chat: ${chatId}`);
+    }
 
     // Lưu tin nhắn của người dùng
     const { data: userMessage, error: userMessageError } = await insertMessage(chatId, 'user', content);
 
     if (userMessageError) {
-      console.log(`[Client: ${clientInstance}] Error saving user message: ${userMessageError.message}`);
+      // Luôn log lỗi database
+      console.error(`[Client: ${clientInstance}] Error saving user message: ${userMessageError.message}`);
       // Đánh dấu phiên chat không còn được xử lý
       if (activeChats.has(chatId)) {
         activeChats.get(chatId).isProcessing = false;
@@ -228,14 +340,25 @@ const sendMessage = async (req, res) => {
       return res.status(400).json({ error: userMessageError.message });
     }
 
-    console.log(`[Client: ${clientInstance}] User message saved with ID: ${userMessage.id}`);
+    // Chỉ log trong môi trường phát triển
+    if (process.env.NODE_ENV === 'development') {
+      console.log(`[Client: ${clientInstance}] User message saved with ID: ${userMessage.id}`);
+    }
+
+    // Xóa cache nếu có
+    if (req.app.locals.messageCache) {
+      const cacheKey = `chat_${chatId}_${userId}`;
+      req.app.locals.messageCache.del(cacheKey);
+    }
 
     // Lấy tất cả tin nhắn trong cuộc trò chuyện để gửi cho Gemini
+    // Tối ưu hóa truy vấn bằng cách giới hạn số lượng tin nhắn và chỉ lấy các trường cần thiết
     const { data: messages, error: messagesError } = await supabase
       .from('messages')
-      .select('*')
+      .select('role, content, created_at') // Chỉ lấy các trường cần thiết
       .eq('chat_id', chatId)
-      .order('created_at', { ascending: true });
+      .order('created_at', { ascending: true })
+      .limit(20); // Giới hạn số lượng tin nhắn để tăng tốc độ xử lý
 
     if (messagesError) {
       console.log(`[Client: ${clientInstance}] Error retrieving messages: ${messagesError.message}`);
@@ -252,14 +375,21 @@ const sendMessage = async (req, res) => {
       content: msg.content
     }));
 
-    console.log(`[Client: ${clientInstance}] Calling Gemini API with ${formattedMessages.length} messages`);
+    // Chỉ log trong môi trường phát triển
+    if (process.env.NODE_ENV === 'development') {
+      console.log(`[Client: ${clientInstance}] Calling Gemini API with ${formattedMessages.length} messages`);
+    }
 
     // Gọi Gemini API để lấy phản hồi
     let assistantResponse;
     try {
       assistantResponse = await getGeminiResponse(userId, formattedMessages);
-      console.log(`[Client: ${clientInstance}] Received response from Gemini API, saving assistant message`);
+      // Chỉ log trong môi trường phát triển
+      if (process.env.NODE_ENV === 'development') {
+        console.log(`[Client: ${clientInstance}] Received response from Gemini API, saving assistant message`);
+      }
     } catch (geminiError) {
+      // Luôn log lỗi API
       console.error(`[Client: ${clientInstance}] Error calling Gemini API:`, geminiError);
       // Đánh dấu phiên chat không còn được xử lý
       if (activeChats.has(chatId)) {
@@ -272,7 +402,8 @@ const sendMessage = async (req, res) => {
     const { data: assistantMessage, error: assistantMessageError } = await insertMessage(chatId, 'assistant', assistantResponse);
 
     if (assistantMessageError) {
-      console.log(`[Client: ${clientInstance}] Error saving assistant message: ${assistantMessageError.message}`);
+      // Luôn log lỗi database
+      console.error(`[Client: ${clientInstance}] Error saving assistant message: ${assistantMessageError.message}`);
       // Đánh dấu phiên chat không còn được xử lý
       if (activeChats.has(chatId)) {
         activeChats.get(chatId).isProcessing = false;
@@ -280,7 +411,10 @@ const sendMessage = async (req, res) => {
       return res.status(400).json({ error: assistantMessageError.message });
     }
 
-    console.log(`[Client: ${clientInstance}] Assistant message saved with ID: ${assistantMessage.id}`);
+    // Chỉ log trong môi trường phát triển
+    if (process.env.NODE_ENV === 'development') {
+      console.log(`[Client: ${clientInstance}] Assistant message saved with ID: ${assistantMessage.id}`);
+    }
 
     // Cập nhật thời gian updated_at của cuộc trò chuyện
     await supabase
@@ -288,12 +422,27 @@ const sendMessage = async (req, res) => {
       .update({ updated_at: new Date() })
       .eq('id', chatId);
 
-    console.log(`[Client: ${clientInstance}] Chat updated_at timestamp updated, returning response`);
+    // Chỉ log trong môi trường phát triển
+    if (process.env.NODE_ENV === 'development') {
+      console.log(`[Client: ${clientInstance}] Chat updated_at timestamp updated, returning response`);
+    }
 
     // Đánh dấu phiên chat không còn được xử lý
     if (activeChats.has(chatId)) {
       activeChats.get(chatId).isProcessing = false;
       activeChats.get(chatId).lastActivity = Date.now();
+    }
+
+    // Xóa cache nếu có
+    if (req.app.locals.messageCache) {
+      const cacheKey = `chat_${chatId}_${userId}`;
+      req.app.locals.messageCache.del(cacheKey);
+    }
+
+    // Xóa cache danh sách chat nếu có
+    if (req.app.locals.chatCache) {
+      const cacheKey = `chats_${userId}`;
+      req.app.locals.chatCache.del(cacheKey);
     }
 
     return res.status(200).json({
